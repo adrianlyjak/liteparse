@@ -156,9 +156,11 @@ impl<'lib> Document<'lib> {
     }
 
     /// Initialize read-only AcroForm access. Returns `None` for documents with
-    /// no form catalog or when PDFium rejects the form-fill environment.
+    /// no form catalog, for retained-document reborrows, or when PDFium rejects
+    /// the form-fill environment. Form actions can mutate document state, so
+    /// retained canonical documents must use a fresh owning document instead.
     pub fn form_environment(&self) -> Option<FormEnvironment<'_, 'lib>> {
-        if self.form_type() == 0 {
+        if !self.owns_handle || self.form_type() == 0 {
             return None;
         }
         let mut callbacks = Box::new(pdfium_sys::FPDF_FORMFILLINFO::default());
@@ -184,6 +186,7 @@ impl<'lib> Document<'lib> {
         Ok(Page {
             handle,
             doc_handle: self.handle,
+            owns_document: self.owns_handle,
             _doc: std::marker::PhantomData,
         })
     }
@@ -197,6 +200,9 @@ impl<'lib> Document<'lib> {
     /// Returns `Ok(None)` when nothing was flattened — the caller should keep
     /// using its existing page.
     pub fn flatten_form_widgets(&self, index: i32) -> Result<Option<Page<'_, 'lib>>, PdfiumError> {
+        if !self.owns_handle {
+            return Err(PdfiumError::OperationFailed);
+        }
         {
             let page = self.page(index)?;
             if !page.flatten_form_widgets_for_display() {

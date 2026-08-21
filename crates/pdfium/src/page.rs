@@ -227,6 +227,7 @@ pub struct PdfFormField {
 pub struct Page<'doc, 'lib: 'doc> {
     pub(crate) handle: pdfium_sys::FPDF_PAGE,
     pub(crate) doc_handle: pdfium_sys::FPDF_DOCUMENT,
+    pub(crate) owns_document: bool,
     pub(crate) _doc: PhantomData<&'doc Document<'lib>>,
 }
 
@@ -1029,9 +1030,13 @@ impl<'doc, 'lib: 'doc> Page<'doc, 'lib> {
     ///
     /// Returns true only when PDFium changed the page. Returns false — leaving
     /// extraction on the original page content — when the pdfium build omits
-    /// the flatten API, or when suppression or flattening fails, in which case
-    /// any changed flags are restored first.
+    /// the flatten API, when the page belongs to a retained-document reborrow,
+    /// or when suppression or flattening fails, in which case any changed flags
+    /// are restored first.
     pub fn flatten_form_widgets_for_display(&self) -> bool {
+        if !self.owns_document {
+            return false;
+        }
         // `fpdf_flatten.h` is an optional pdfium API; trimmed builds omit it.
         // Missing it costs form-value text, not the whole parse.
         let Some(api) = FlattenApi::load() else {
