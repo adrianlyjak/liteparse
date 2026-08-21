@@ -7,7 +7,9 @@ use crate::page::Page;
 ///
 /// The `'lib` lifetime ties this `Document` to the [`Library`] that opened
 /// it, statically guaranteeing that no PDFium calls happen after the
-/// process-wide PDFium lock has been released.
+/// process-wide PDFium lock has been released. Documents loaded from bytes
+/// use the same lifetime for their source buffer because PDFium reads it
+/// lazily.
 pub struct Document<'lib> {
     pub(crate) handle: pdfium_sys::FPDF_DOCUMENT,
     pub(crate) _lib: std::marker::PhantomData<&'lib Library>,

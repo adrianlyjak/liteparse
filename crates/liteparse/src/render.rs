@@ -288,7 +288,8 @@ struct ImageBoundsOutput {
 /// Extract image bounding boxes and print as JSON to stdout.
 pub fn image_bounds(pdf_path: &str, page_num: Option<u32>) -> Result<(), LiteParseError> {
     let lib = Library::init();
-    let document = load_document_from_input(&lib, &PdfInput::Path(pdf_path.to_string()), None)?;
+    let input = PdfInput::Path(pdf_path.to_string());
+    let document = load_document_from_input(&lib, &input, None)?;
     let page_count = document.page_count();
 
     for page_index in 0..page_count {

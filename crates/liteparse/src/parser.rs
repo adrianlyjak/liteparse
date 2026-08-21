@@ -225,22 +225,22 @@ struct PdfTransaction<'a> {
     resolved: &'a ResolvedInput,
 }
 
-trait PdfDocumentAccess {
-    async fn transact<T, F>(&self, operation: F) -> Result<T, LiteParseError>
+/// Lend transaction-scoped PDFium access without imposing async task
+/// ownership bounds on the operation or its result.
+trait DocumentAccess {
+    fn transact<T, F>(&self, operation: F) -> Result<T, LiteParseError>
     where
-        T: Send + 'static,
-        F: for<'a> FnOnce(PdfTransaction<'a>) -> Result<T, LiteParseError> + Send + 'static;
+        F: for<'a> FnOnce(PdfTransaction<'a>) -> Result<T, LiteParseError>;
 }
 
 struct ReopeningDocumentAccess<'a> {
     resolved: &'a ResolvedInput,
 }
 
-impl PdfDocumentAccess for ReopeningDocumentAccess<'_> {
-    async fn transact<T, F>(&self, operation: F) -> Result<T, LiteParseError>
+impl DocumentAccess for ReopeningDocumentAccess<'_> {
+    fn transact<T, F>(&self, operation: F) -> Result<T, LiteParseError>
     where
-        T: Send + 'static,
-        F: for<'a> FnOnce(PdfTransaction<'a>) -> Result<T, LiteParseError> + Send + 'static,
+        F: for<'a> FnOnce(PdfTransaction<'a>) -> Result<T, LiteParseError>,
     {
         let library = Library::init();
         operation(PdfTransaction {
@@ -275,30 +275,32 @@ fn extract_transaction(
         .flatten();
     #[cfg(target_arch = "wasm32")]
     let repaired_input: Option<PdfInput> = None;
-    let document_input = repaired_input.as_ref().unwrap_or(validated_input);
+    let mut state = {
+        let document_input = repaired_input.as_ref().unwrap_or(validated_input);
+        let document =
+            extract::load_document_from_input(transaction.library, document_input, password)?;
+        let source_document = (parser.config.extract_document_metadata
+            && !transaction.resolved.is_converted()
+            && repaired_input.is_some())
+        .then(|| {
+            extract::load_document_from_input(transaction.library, validated_input, password).ok()
+        })
+        .flatten();
 
-    let document =
-        extract::load_document_from_input(transaction.library, document_input, password)?;
-
-    let source_document = (parser.config.extract_document_metadata
-        && !transaction.resolved.is_converted()
-        && repaired_input.is_some())
-    .then(|| extract::load_document_from_input(transaction.library, validated_input, password).ok())
-    .flatten();
-
-    let mut state = extract_loaded_document(
-        parser,
-        transaction.library,
-        &document,
-        source_document.as_ref().unwrap_or(&document),
-        validated_input,
-        document_input,
-        transaction.resolved.is_converted(),
-        target_pages,
-        max_pages,
-        outline,
-        started_at,
-    )?;
+        extract_loaded_document(
+            parser,
+            transaction.library,
+            &document,
+            source_document.as_ref().unwrap_or(&document),
+            validated_input,
+            document_input,
+            transaction.resolved.is_converted(),
+            target_pages,
+            max_pages,
+            outline,
+            started_at,
+        )?
+    };
     state.repaired_input = repaired_input;
     Ok(state)
 }
@@ -307,16 +309,14 @@ fn extract_transaction(
 fn render_ocr_transaction(
     parser: &LiteParse,
     transaction: PdfTransaction<'_>,
-    repaired_input: Option<std::sync::Arc<PdfInput>>,
-    pages: Vec<Page>,
+    repaired_input: Option<&PdfInput>,
+    pages: &[Page],
     round_start: usize,
     round_rasters: usize,
     grayscale: bool,
     reflatten_pages: &std::collections::HashSet<u32>,
-) -> Result<(Vec<Page>, Vec<ocr_merge::RenderedPage>, usize), LiteParseError> {
-    let input = repaired_input
-        .as_deref()
-        .unwrap_or(&transaction.resolved.input);
+) -> Result<(Vec<ocr_merge::RenderedPage>, usize), LiteParseError> {
+    let input = repaired_input.unwrap_or(&transaction.resolved.input);
     let document = extract::load_document_from_input(
         transaction.library,
         input,
@@ -324,7 +324,7 @@ fn render_ocr_transaction(
     )?;
     let (rendered, next_start) = ocr_merge::render_pages_for_ocr(
         &document,
-        &pages,
+        pages,
         round_start,
         round_rasters,
         parser.config.dpi,
@@ -333,7 +333,7 @@ fn render_ocr_transaction(
         parser.config.continue_on_page_error,
         reflatten_pages,
     )?;
-    Ok((pages, rendered, next_start))
+    Ok((rendered, next_start))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -817,7 +817,7 @@ impl LiteParse {
         .await
     }
 
-    async fn parse_with_access<T: PdfDocumentAccess>(
+    async fn parse_with_access<T: DocumentAccess>(
         &self,
         access: &T,
         target_pages: Option<&[u32]>,
@@ -877,20 +877,9 @@ impl LiteParse {
             None
         };
         let ocr_grayscale = ocr_engine.as_ref().is_some_and(|e| e.prefers_grayscale());
-        let parser = self.clone();
-        let target_pages = target_pages.map(<[u32]>::to_vec);
-        let mut state = access
-            .transact(move |transaction| {
-                extract_transaction(
-                    &parser,
-                    transaction,
-                    target_pages.as_deref(),
-                    max_pages,
-                    outline,
-                    t0,
-                )
-            })
-            .await?;
+        let mut state = access.transact(|transaction| {
+            extract_transaction(self, transaction, target_pages, max_pages, outline, t0)
+        })?;
         let t1 = web_time::Instant::now();
 
         if let Some(engine) = ocr_engine {
@@ -906,28 +895,21 @@ impl LiteParse {
                 } else {
                     std::collections::HashSet::new()
                 };
-            let repaired_input = state.repaired_input.take().map(std::sync::Arc::new);
+            let repaired_input = state.repaired_input.as_ref();
             let mut round_start = 0usize;
             while round_start < state.pages.len() {
-                let pages = std::mem::take(&mut state.pages);
-                let parser = self.clone();
-                let repaired_input = repaired_input.clone();
-                let reflatten_pages = reflatten_pages.clone();
-                let (returned_pages, rendered, next_start) = access
-                    .transact(move |transaction| {
-                        render_ocr_transaction(
-                            &parser,
-                            transaction,
-                            repaired_input,
-                            pages,
-                            round_start,
-                            round_rasters,
-                            ocr_grayscale,
-                            &reflatten_pages,
-                        )
-                    })
-                    .await?;
-                state.pages = returned_pages;
+                let (rendered, next_start) = access.transact(|transaction| {
+                    render_ocr_transaction(
+                        self,
+                        transaction,
+                        repaired_input,
+                        &state.pages,
+                        round_start,
+                        round_rasters,
+                        ocr_grayscale,
+                        &reflatten_pages,
+                    )
+                })?;
                 round_start = next_start;
                 if rendered.is_empty() {
                     // The scan reached the end without finding another page
