@@ -90,7 +90,8 @@ impl<'lib> Bitmap<'lib> {
     /// Format is BGRA, row-major, with `stride()` bytes per row.
     pub fn buffer(&self) -> &[u8] {
         let ptr = unsafe { ffi!(FPDFBitmap_GetBuffer(self.handle)) };
-        let len = (self.stride() * self.height()) as usize;
+        let len = checked_buffer_len(self.stride(), self.height())
+            .expect("invalid PDFium bitmap buffer dimensions");
         unsafe { std::slice::from_raw_parts(ptr as *const u8, len) }
     }
 
@@ -178,8 +179,31 @@ impl<'lib> Bitmap<'lib> {
     }
 }
 
+fn checked_buffer_len(stride: i32, height: i32) -> Option<usize> {
+    let stride = usize::try_from(stride).ok()?;
+    let height = usize::try_from(height).ok()?;
+    stride
+        .checked_mul(height)
+        .filter(|&len| len <= isize::MAX as usize)
+}
+
 impl Drop for Bitmap<'_> {
     fn drop(&mut self) {
         unsafe { ffi!(FPDFBitmap_Destroy(self.handle)) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::checked_buffer_len;
+
+    #[test]
+    fn bitmap_buffer_length_does_not_multiply_as_i32() {
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(checked_buffer_len(i32::MAX, 2), Some(i32::MAX as usize * 2));
+        #[cfg(target_pointer_width = "32")]
+        assert_eq!(checked_buffer_len(i32::MAX, 2), None);
+        assert_eq!(checked_buffer_len(-1, 2), None);
+        assert_eq!(checked_buffer_len(1, -2), None);
     }
 }

@@ -216,7 +216,6 @@ mod tests {
         ));
         library.close_retained_document(retained);
     }
-
     #[test]
     fn retained_document_reborrow_rejects_form_mutation() {
         let bytes = include_bytes!("../../../integration_tests_data/filled_acroform.pdf");
@@ -233,6 +232,7 @@ mod tests {
             borrowed.flatten_form_widgets(0),
             Err(PdfiumError::OperationFailed)
         ));
+        assert!(!borrowed.page(0).unwrap().flatten_form_widgets_for_display());
 
         drop(borrowed);
         library.close_retained_document(retained);
