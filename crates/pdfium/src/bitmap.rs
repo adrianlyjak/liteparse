@@ -138,6 +138,25 @@ impl<'lib> Bitmap<'lib> {
         rgb
     }
 
+    /// Convert the BGRA buffer to tightly-packed RGBX with an opaque padding
+    /// byte, suitable for consumers that prefer four-byte pixel alignment.
+    pub fn to_rgbx(&self) -> Vec<u8> {
+        let width = self.width() as usize;
+        let height = self.height() as usize;
+        let stride = self.stride() as usize;
+        let src = self.buffer();
+        let mut rgbx = Vec::with_capacity(width * height * 4);
+
+        for y in 0..height {
+            let row = &src[y * stride..y * stride + width * 4];
+            for pixel in row.chunks_exact(4) {
+                rgbx.extend_from_slice(&[pixel[2], pixel[1], pixel[0], 0xff]);
+            }
+        }
+
+        rgbx
+    }
+
     /// Convert the BGRA buffer to tightly-packed 8-bit grayscale (1 byte/px)
     /// using Rec. 601 luma weights.
     pub fn to_luma(&self) -> Vec<u8> {

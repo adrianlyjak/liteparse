@@ -19,6 +19,104 @@ pub struct RenderedPage {
     pub rects: Vec<ScreenshotRect>,
 }
 
+/// Channel layout for an unencoded page raster.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RasterPixelFormat {
+    /// Three tightly-packed bytes per pixel: red, green, blue.
+    Rgb8,
+    /// Four tightly-packed bytes per pixel: red, green, blue, opaque padding.
+    Rgbx8,
+}
+
+/// Options for rendering one page to an unencoded pixel buffer.
+#[derive(Debug, Clone, Copy)]
+pub struct PageRasterOptions {
+    pub dpi: f32,
+    pub pixel_format: RasterPixelFormat,
+    pub render_form_fields: bool,
+}
+
+impl Default for PageRasterOptions {
+    fn default() -> Self {
+        Self {
+            dpi: 150.0,
+            pixel_format: RasterPixelFormat::Rgb8,
+            render_form_fields: false,
+        }
+    }
+}
+
+/// One rendered page as owned, tightly-packed pixels.
+#[derive(Debug, Clone)]
+pub struct PageRaster {
+    pub page_num: u32,
+    pub width: u32,
+    pub height: u32,
+    pub stride: u32,
+    pub pixel_format: RasterPixelFormat,
+    pub pixels: Vec<u8>,
+}
+
+/// Render one page from an already-selected document to owned raw pixels.
+pub(crate) fn render_page_raster(
+    document: &pdfium::Document,
+    page_num: u32,
+    options: PageRasterOptions,
+) -> Result<PageRaster, LiteParseError> {
+    if !options.dpi.is_finite() || options.dpi <= 0.0 {
+        return Err(LiteParseError::Config(
+            "raster dpi must be a positive finite number".to_string(),
+        ));
+    }
+
+    let page_count = document.page_count().max(0) as u32;
+    if page_num == 0 || page_num > page_count {
+        return Err(LiteParseError::Other(format!(
+            "page {page_num} out of range (document has {page_count} pages)"
+        )));
+    }
+
+    let form = options
+        .render_form_fields
+        .then(|| document.form_environment())
+        .flatten();
+    if let Some(form) = form.as_ref() {
+        form.run_document_actions();
+    }
+    let page = document.page((page_num - 1) as i32)?;
+    let bitmap = page.render_with_form(options.dpi, form.as_ref())?;
+    let width = u32::try_from(bitmap.width())
+        .map_err(|_| LiteParseError::Other("invalid raster width".to_string()))?;
+    let height = u32::try_from(bitmap.height())
+        .map_err(|_| LiteParseError::Other("invalid raster height".to_string()))?;
+    let (channels, pixels) = match options.pixel_format {
+        RasterPixelFormat::Rgb8 => (3, bitmap.to_rgb()),
+        RasterPixelFormat::Rgbx8 => (4, bitmap.to_rgbx()),
+    };
+    let stride = width
+        .checked_mul(channels)
+        .ok_or_else(|| LiteParseError::Other("raster stride overflow".to_string()))?;
+    let expected_len = usize::try_from(stride)
+        .ok()
+        .and_then(|stride| stride.checked_mul(height as usize))
+        .ok_or_else(|| LiteParseError::Other("raster size overflow".to_string()))?;
+    if pixels.len() != expected_len {
+        return Err(LiteParseError::Other(format!(
+            "invalid raster length: expected {expected_len}, got {}",
+            pixels.len()
+        )));
+    }
+
+    Ok(PageRaster {
+        page_num,
+        width,
+        height,
+        stride,
+        pixel_format: options.pixel_format,
+        pixels,
+    })
+}
+
 /// Render selected pages from a PDF input to PNG bytes.
 ///
 /// With `render_form_fields`, form-field appearances (filled values, checkbox
