@@ -64,6 +64,30 @@ try {
     document.screenshotPages([2 ** 32 + 1]),
     /page number must be a finite integer/,
   );
+  const raster = await document.rasterPage(1, {
+    dpi: 36,
+    pixelFormat: "rgb8",
+  });
+  assert.equal(raster.stride, raster.width * 3);
+  assert.equal(raster.pixels.length, raster.stride * raster.height);
+  const alignedRaster = await document.rasterPage(1, {
+    dpi: 36,
+    pixelFormat: "rgbx8",
+  });
+  assert.equal(alignedRaster.width, raster.width);
+  assert.equal(alignedRaster.height, raster.height);
+  assert.equal(alignedRaster.stride, alignedRaster.width * 4);
+  assert.equal(
+    alignedRaster.pixels.length,
+    alignedRaster.stride * alignedRaster.height,
+  );
+  for (let pixel = 0; pixel < raster.width * raster.height; pixel += 1) {
+    assert.deepEqual(
+      alignedRaster.pixels.subarray(pixel * 4, pixel * 4 + 3),
+      raster.pixels.subarray(pixel * 3, pixel * 3 + 3),
+    );
+    assert.equal(alignedRaster.pixels[pixel * 4 + 3], 255);
+  }
 } finally {
   await document.close();
 }
@@ -108,6 +132,7 @@ assert.deepEqual(
 await assert.rejects(document.parsePages([1]), /document is closed/);
 await assert.rejects(document.reopen(), /document is closed/);
 await assert.rejects(document.screenshotPages([1]), /document is closed/);
+await assert.rejects(document.rasterPage(1), /document is closed/);
 
 const converted = await parser.openDocument(receipt);
 try {
