@@ -28,3 +28,5 @@ node -e '
     console.log("Native module loaded successfully");
   }).catch(e => { console.error(e); process.exit(1); });
 '
+
+node scripts/smoke-open-document.mjs

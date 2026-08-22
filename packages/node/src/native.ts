@@ -311,6 +311,7 @@ export interface NativeScreenshotResult {
 export interface NativeOpenDocument {
   readonly pageCount: number;
   parse(): Promise<NativeParseResult>;
+  parsePages(pageNumbers: number[]): Promise<NativeParseResult>;
   close(): Promise<void>;
 }
 

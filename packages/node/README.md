@@ -161,7 +161,7 @@ const parser = new LiteParse({ ocrEnabled: false });
 const document = await parser.openDocument("document.pdf");
 try {
   console.log(document.pageCount);
-  const result = await document.parse();
+  const result = await document.parsePages([1, 2]);
 } finally {
   await document.close();
 }

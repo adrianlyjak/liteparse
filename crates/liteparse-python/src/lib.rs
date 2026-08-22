@@ -1367,6 +1367,15 @@ impl PyOpenDocument {
         Ok(PyParseResult::from_rust(result, self.extract_text_metadata))
     }
 
+    fn parse_pages(&self, py: Python<'_>, page_numbers: Vec<u32>) -> PyResult<PyParseResult> {
+        let result = py
+            .detach(|| self.runtime.block_on(self.inner.parse_pages(page_numbers)))
+            .map_err(|error| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(error.to_string())
+            })?;
+        Ok(PyParseResult::from_rust(result, self.extract_text_metadata))
+    }
+
     fn close(&self, py: Python<'_>) {
         py.detach(|| self.inner.close());
     }

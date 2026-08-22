@@ -236,6 +236,17 @@ impl OpenDocument {
         Ok(JsParseResult::from_rust(&result, &self.config))
     }
 
+    /// Parse an explicit set of 1-based source pages.
+    #[napi]
+    pub async fn parse_pages(&self, page_numbers: Vec<u32>) -> Result<JsParseResult> {
+        let result = self
+            .inner
+            .parse_pages(page_numbers)
+            .await
+            .map_err(|error| Error::from_reason(error.to_string()))?;
+        Ok(JsParseResult::from_rust(&result, &self.config))
+    }
+
     /// Release the retained PDF. Idempotent.
     #[napi(ts_return_type = "Promise<void>")]
     pub fn close(&self) -> AsyncTask<CloseDocumentTask> {

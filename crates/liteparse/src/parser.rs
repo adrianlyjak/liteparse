@@ -1456,6 +1456,33 @@ impl OpenDocument {
         self.page_count
     }
 
+    fn ensure_open(&self) -> Result<(), LiteParseError> {
+        let stored = self
+            .stored
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if stored.is_none() {
+            return Err(LiteParseError::Other("document is closed".to_string()));
+        }
+        Ok(())
+    }
+
+    async fn parse_selected(
+        &self,
+        target_pages: Option<&[u32]>,
+    ) -> Result<ParseResult, LiteParseError> {
+        let outline = self.outline.get().cloned();
+        let should_cache_outline = outline.is_none();
+        let result = self
+            .parser
+            .parse_with_access(self, target_pages, self.parser.config.max_pages, outline)
+            .await?;
+        if should_cache_outline {
+            let _ = self.outline.set(result.outline.clone());
+        }
+        Ok(result)
+    }
+
     /// Parse the retained PDF with the configuration used to open it.
     ///
     /// OCR awaits occur between short PDFium transactions. A concurrent
@@ -1463,21 +1490,42 @@ impl OpenDocument {
     /// cause this parse to return `document is closed` at the next one.
     pub async fn parse(&self) -> Result<ParseResult, LiteParseError> {
         let target_pages = self.parser.resolve_target_pages()?;
-        let outline = self.outline.get().cloned();
-        let should_cache_outline = outline.is_none();
-        let result = self
-            .parser
-            .parse_with_access(
-                self,
-                target_pages.as_deref(),
-                self.parser.config.max_pages,
-                outline,
-            )
-            .await?;
-        if should_cache_outline {
-            let _ = self.outline.set(result.outline.clone());
+        self.parse_selected(target_pages.as_deref()).await
+    }
+
+    /// Parse an explicit set of 1-based source pages.
+    ///
+    /// The selection must be nonempty and entirely within the document. Pages
+    /// are sorted and deduplicated into source order, then limited by the
+    /// parser's `max_pages` configuration. This explicit selection ignores the
+    /// parser's configured `target_pages`.
+    pub async fn parse_pages<I>(&self, page_numbers: I) -> Result<ParseResult, LiteParseError>
+    where
+        I: IntoIterator<Item = u32>,
+    {
+        // Preserve the retained-handle contract: once closed, every operation
+        // reports that state before validating its own arguments.
+        self.ensure_open()?;
+
+        let mut page_numbers: Vec<u32> = page_numbers.into_iter().collect();
+        if page_numbers.is_empty() {
+            return Err(LiteParseError::Other(
+                "page selection cannot be empty".to_string(),
+            ));
         }
-        Ok(result)
+        for &page_number in &page_numbers {
+            if page_number == 0 || page_number > self.page_count {
+                return Err(LiteParseError::Other(format!(
+                    "page {page_number} out of range (document has {} pages)",
+                    self.page_count
+                )));
+            }
+        }
+
+        page_numbers.sort_unstable();
+        page_numbers.dedup();
+        page_numbers.truncate(self.parser.config.max_pages);
+        self.parse_selected(Some(&page_numbers)).await
     }
 
     /// Close the retained PDF. Calling this more than once is a no-op.

@@ -513,6 +513,11 @@ export class OpenDocument {
     return toParseResult(await this._native.parse());
   }
 
+  /** Parse explicit 1-based source pages in source-document order. */
+  async parsePages(pageNumbers: readonly number[]): Promise<ParseResult> {
+    return toParseResult(await this._native.parsePages(Array.from(pageNumbers)));
+  }
+
   /** Release the retained PDF. Safe to call more than once. */
   async close(): Promise<void> {
     await this._native.close();

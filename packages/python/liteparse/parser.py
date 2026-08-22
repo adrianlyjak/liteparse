@@ -1,7 +1,7 @@
 """LiteParse Python wrapper - native Rust bindings via PyO3."""
 
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple, Union, cast
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple, Union, cast
 
 from liteparse._liteparse import LiteParse as _NativeLiteParse
 from liteparse._liteparse import search_items as _native_search_items
@@ -451,6 +451,15 @@ class OpenDocument:
         """Parse the retained PDF."""
         try:
             return _convert_native_result(self._native.parse())
+        except Exception as error:
+            raise ParseError(str(error)) from error
+
+    def parse_pages(self, page_numbers: Iterable[int]) -> ParseResult:
+        """Parse explicit 1-based source pages in source-document order."""
+        try:
+            return _convert_native_result(
+                self._native.parse_pages(list(page_numbers))
+            )
         except Exception as error:
             raise ParseError(str(error)) from error
 

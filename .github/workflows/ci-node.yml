@@ -211,6 +211,7 @@ jobs:
               console.log('Native module loaded successfully');
             });
           "
+          node scripts/smoke-open-document.mjs
 
       - name: Smoke test (musl container)
         if: ${{ matrix.use-container }}

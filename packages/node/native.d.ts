@@ -615,6 +615,8 @@ export declare class OpenDocument {
   get pageCount(): number
   /** Parse the retained PDF. */
   parse(): Promise<JsParseResult>
+  /** Parse an explicit set of 1-based source pages. */
+  parsePages(pageNumbers: Array<number>): Promise<JsParseResult>
   /** Release the retained PDF. Idempotent. */
   close(): Promise<void>
 }

@@ -124,7 +124,7 @@ from liteparse import LiteParse
 parser = LiteParse(ocr_enabled=False)
 with parser.open_document("document.pdf") as document:
     print(document.page_count)
-    result = document.parse()
+    result = document.parse_pages([1, 2])
 ```
 
 ## Screenshots
