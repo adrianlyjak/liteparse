@@ -1,4 +1,4 @@
-"""Retained PDF and raw-raster Python API coverage."""
+"""Retained PDF and raw raster Python API coverage."""
 
 from pathlib import Path
 
