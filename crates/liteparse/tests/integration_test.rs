@@ -970,8 +970,15 @@ mod open_document {
 
     #[tokio::test]
     #[serial]
-    async fn repeated_form_parse_and_render_are_stable() {
-        let document = parser()
+    async fn form_parse_matches_one_shot_and_render_is_stable() {
+        let parser = LiteParse::new(LiteParseConfig {
+            ocr_enabled: false,
+            quiet: true,
+            extract_form_fields: true,
+            ..Default::default()
+        });
+        let expected = parser.parse(ACROFORM_PDF).await.unwrap();
+        let document = parser
             .open_document(PdfInput::Path(ACROFORM_PDF.into()))
             .unwrap();
         let first = document.parse().await.unwrap();
@@ -996,13 +1003,29 @@ mod open_document {
                 },
             )
             .unwrap();
+        let raster_without_forms = document
+            .raster_page(
+                1,
+                PageRasterOptions {
+                    dpi: 36.0,
+                    pixel_format: RasterPixelFormat::Rgb8,
+                    render_form_fields: false,
+                },
+            )
+            .unwrap();
 
+        assert_eq!(first.text, expected.text);
+        assert_eq!(
+            serde_json::to_value(&first.pages).unwrap(),
+            serde_json::to_value(&expected.pages).unwrap()
+        );
         assert_eq!(second.text, first.text);
         assert_eq!(
             serde_json::to_value(&second.pages).unwrap(),
             serde_json::to_value(&first.pages).unwrap()
         );
         assert_eq!(second_raster.pixels, first_raster.pixels);
+        assert_ne!(first_raster.pixels, raster_without_forms.pixels);
         for expected in ["ACROFORM-CUSTOMER-7319", "2026-07-28", "NESTED-ONLY-VALUE"] {
             assert_eq!(second.text.matches(expected).count(), 1);
         }

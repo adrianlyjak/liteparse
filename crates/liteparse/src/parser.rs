@@ -336,8 +336,9 @@ fn extract_transaction(
     let repaired_input: Option<PdfInput> = None;
     let mut state = {
         let document_input = repaired_input.as_ref().unwrap_or(validated_input);
-        // Form extraction can flatten widget appearances into page content.
-        // Preserve the retained canonical handle by mutating a fresh document.
+        // Text extraction flattens visible widget appearances into page content
+        // even when structured form-field output is disabled. Preserve the
+        // retained canonical handle by mutating a fresh document for any form.
         let needs_scratch = repaired_input.is_some()
             || transaction
                 .canonical
@@ -448,7 +449,22 @@ fn raster_transaction(
         .as_ref()
         .or(transaction.canonical.as_ref())
         .expect("a PDF transaction must provide or open a document");
-    render::render_page_raster(document, page_num, options)
+    let form = if options.render_form_fields && document.form_type() != 0 {
+        Some(
+            document
+                .form_environment()
+                .ok_or(pdfium::PdfiumError::OperationFailed)?,
+        )
+    } else {
+        None
+    };
+    render::render_page_raster(
+        document,
+        form.as_ref(),
+        page_num,
+        options.dpi,
+        options.pixel_format,
+    )
 }
 
 fn extract_loaded_document(

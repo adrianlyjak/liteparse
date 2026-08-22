@@ -186,7 +186,6 @@ impl<'lib> Document<'lib> {
         Ok(Page {
             handle,
             doc_handle: self.handle,
-            owns_document: self.owns_handle,
             _doc: std::marker::PhantomData,
         })
     }

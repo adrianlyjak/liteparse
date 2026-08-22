@@ -233,7 +233,6 @@ mod tests {
             borrowed.flatten_form_widgets(0),
             Err(PdfiumError::OperationFailed)
         ));
-        assert!(!borrowed.page(0).unwrap().flatten_form_widgets_for_display());
 
         drop(borrowed);
         library.close_retained_document(retained);
