@@ -7,7 +7,10 @@
 export const enum JsRasterPixelFormat {
   /** Three tightly packed bytes per pixel: red, green, blue. */
   Rgb8 = 'rgb8',
-  /** Four tightly packed bytes per pixel: red, green, blue, opaque padding. */
+  /**
+   * Four tightly packed bytes per pixel: red, green, blue, opaque padding.
+   * The fourth byte is not an alpha channel.
+   */
   Rgbx8 = 'rgbx8'
 }
 /** Options for rendering one page to raw pixels. */
@@ -21,11 +24,14 @@ export interface JsPageRasterOptions {
 }
 /** One rendered page as owned, tightly packed pixels. */
 export interface JsPageRaster {
+  /** 1-based source page number. */
   pageNum: number
   width: number
   height: number
+  /** Bytes between adjacent rows. */
   stride: number
   pixelFormat: JsRasterPixelFormat
+  /** Pixel bytes in the declared channel layout. */
   pixels: Buffer
 }
 export interface JsLiteParseConfig {
