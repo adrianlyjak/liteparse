@@ -88,6 +88,14 @@ try {
     );
     assert.equal(alignedRaster.pixels[pixel * 4 + 3], 255);
   }
+  await assert.rejects(
+    document.rasterPage(1.5),
+    /page number must be a finite integer/,
+  );
+  await assert.rejects(
+    document.rasterPage(2 ** 32 + 1),
+    /page number must be a finite integer/,
+  );
 } finally {
   await document.close();
 }

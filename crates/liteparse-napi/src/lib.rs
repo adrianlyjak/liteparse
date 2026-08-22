@@ -8,23 +8,22 @@ use types::{
     JsParseBatch, JsParseResult, JsScreenshotResult, JsTextItem,
 };
 
+fn page_number_from_js(page_number: f64) -> Result<u32> {
+    if page_number.is_finite()
+        && page_number.fract() == 0.0
+        && page_number >= 0.0
+        && page_number <= u32::MAX as f64
+    {
+        Ok(page_number as u32)
+    } else {
+        Err(Error::from_reason(format!(
+            "page number must be a finite integer representable as u32: {page_number}"
+        )))
+    }
+}
+
 fn page_numbers_from_js(page_numbers: Vec<f64>) -> Result<Vec<u32>> {
-    page_numbers
-        .into_iter()
-        .map(|page_number| {
-            if page_number.is_finite()
-                && page_number.fract() == 0.0
-                && page_number >= 0.0
-                && page_number <= u32::MAX as f64
-            {
-                Ok(page_number as u32)
-            } else {
-                Err(Error::from_reason(format!(
-                    "page number must be a finite integer representable as u32: {page_number}"
-                )))
-            }
-        })
-        .collect()
+    page_numbers.into_iter().map(page_number_from_js).collect()
 }
 
 /// Main LiteParse parser class.
@@ -289,7 +288,7 @@ impl OpenDocument {
     #[napi(ts_return_type = "Promise<JsPageRaster>")]
     pub fn raster_page(
         &self,
-        page_num: u32,
+        page_num: f64,
         options: Option<JsPageRasterOptions>,
     ) -> AsyncTask<RasterPageTask> {
         AsyncTask::new(RasterPageTask {
@@ -345,7 +344,7 @@ impl Task for ScreenshotPagesTask {
 
 pub struct RasterPageTask {
     document: std::sync::Arc<liteparse::OpenDocument>,
-    page_num: u32,
+    page_num: f64,
     options: JsPageRasterOptions,
 }
 
@@ -355,8 +354,9 @@ impl Task for RasterPageTask {
     type JsValue = JsPageRaster;
 
     fn compute(&mut self) -> Result<Self::Output> {
+        let page_num = page_number_from_js(self.page_num)?;
         self.document
-            .raster_page(self.page_num, self.options.clone().into_rust())
+            .raster_page(page_num, self.options.clone().into_rust())
             .map_err(|error| Error::from_reason(error.to_string()))
     }
 
