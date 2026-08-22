@@ -1503,8 +1503,8 @@ impl OpenDocument {
     where
         P: AsRef<[u32]>,
     {
-        // Preserve the retained-handle contract: once closed, every operation
-        // reports that state before validating its own arguments.
+        // Closed state takes precedence over argument validation for every
+        // operation on the retained document.
         self.ensure_open()?;
 
         let mut page_numbers = page_numbers.as_ref().to_vec();
