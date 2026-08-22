@@ -150,6 +150,23 @@ const result = await parser.parse(pdfBytes);
 console.log(result.text);
 ```
 
+## Keep a PDF open
+
+Retain a PDF when several operations need the same document:
+
+```typescript
+import { LiteParse } from "@llamaindex/liteparse";
+
+const parser = new LiteParse({ ocrEnabled: false });
+const document = await parser.openDocument("document.pdf");
+try {
+  console.log(document.pageCount);
+  const result = await document.parse();
+} finally {
+  await document.close();
+}
+```
+
 ## Screenshots
 
 Generate PNG screenshots of document pages:

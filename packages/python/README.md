@@ -114,6 +114,19 @@ with open("document.pdf", "rb") as f:
 print(result.text)
 ```
 
+## Keep a PDF open
+
+Retain a PDF when several operations need the same document:
+
+```python
+from liteparse import LiteParse
+
+parser = LiteParse(ocr_enabled=False)
+with parser.open_document("document.pdf") as document:
+    print(document.page_count)
+    result = document.parse()
+```
+
 ## Screenshots
 
 Generate PNG screenshots of document pages:

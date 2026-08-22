@@ -569,6 +569,8 @@ export declare class LiteParse {
   constructor(config?: JsLiteParseConfig | undefined | null)
   /** Parse a document. Accepts a file path (string) or raw PDF bytes (Buffer). */
   parse(input: string | Buffer): Promise<JsParseResult>
+  /** Open a PDF once for repeated parsing. */
+  openDocument(input: string | Buffer): Promise<OpenDocument>
   /**
    * Open a document for bounded-memory batch parsing. Internal plumbing
    * for the JS wrapper's `parseBatches()` — prefer that; it also closes
@@ -606,6 +608,15 @@ export declare class LiteParse {
   screenshot(input: string | Buffer, pageNumbers?: Array<number> | undefined | null): Promise<Array<JsScreenshotResult>>
   /** Get the current configuration. */
   get config(): JsLiteParseConfig
+}
+/** A PDF kept open for repeated parsing. */
+export declare class OpenDocument {
+  /** Total pages in the source PDF. */
+  get pageCount(): number
+  /** Parse the retained PDF. */
+  parse(): Promise<JsParseResult>
+  /** Release the retained PDF. Idempotent. */
+  close(): Promise<void>
 }
 /**
  * A document opened once and parsed in bounded page batches. Internal

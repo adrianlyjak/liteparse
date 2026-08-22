@@ -308,6 +308,12 @@ export interface NativeScreenshotResult {
   rects: NativeScreenshotRect[];
 }
 
+export interface NativeOpenDocument {
+  readonly pageCount: number;
+  parse(): Promise<NativeParseResult>;
+  close(): Promise<void>;
+}
+
 export interface NativeScreenshotRect {
   x: number;
   y: number;
@@ -359,6 +365,7 @@ export interface NativeParseSession {
 
 export interface LiteParseNative {
   parse(input: string | Buffer): Promise<NativeParseResult>;
+  openDocument(input: string | Buffer): Promise<NativeOpenDocument>;
   openBatchSession(
     input: string | Buffer,
     batchSize?: number,

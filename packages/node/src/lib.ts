@@ -9,6 +9,7 @@ import {
   type NativeExtractedImage,
   type NativeStructureTreeElement,
   type NativePageComplexityStats,
+  type NativeOpenDocument,
   type NativeScreenshotResult,
 } from "./native.js";
 
@@ -500,6 +501,24 @@ export interface ScreenshotResult {
   rects: ScreenshotRect[];
 }
 
+/** A PDF kept open for repeated parsing. */
+export class OpenDocument {
+  constructor(private readonly _native: NativeOpenDocument) {}
+
+  get pageCount(): number {
+    return this._native.pageCount;
+  }
+
+  async parse(): Promise<ParseResult> {
+    return toParseResult(await this._native.parse());
+  }
+
+  /** Release the retained PDF. Safe to call more than once. */
+  async close(): Promise<void> {
+    await this._native.close();
+  }
+}
+
 /** One solid rectangle (or line) detected in a rendered page bitmap. */
 export interface ScreenshotRect {
   x: number;
@@ -699,6 +718,13 @@ export class LiteParse {
       typeof input === "string" ? input : Buffer.from(input);
     const result: NativeParseResult = await this._native.parse(nativeInput);
     return toParseResult(result);
+  }
+
+  /** Open a PDF once for repeated parsing. */
+  async openDocument(input: LiteParseInput): Promise<OpenDocument> {
+    const nativeInput =
+      typeof input === "string" ? input : Buffer.from(input);
+    return new OpenDocument(await this._native.openDocument(nativeInput));
   }
 
   /**
