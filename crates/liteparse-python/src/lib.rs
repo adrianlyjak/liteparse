@@ -1340,6 +1340,114 @@ impl PyLiteParseConfig {
 }
 
 // ---------------------------------------------------------------------------
+// Open document and page raster
+// ---------------------------------------------------------------------------
+
+#[pyclass(frozen, name = "_PageRaster", skip_from_py_object)]
+struct PyPageRaster {
+    #[pyo3(get)]
+    page_num: u32,
+    #[pyo3(get)]
+    width: u32,
+    #[pyo3(get)]
+    height: u32,
+    #[pyo3(get)]
+    stride: u32,
+    #[pyo3(get)]
+    pixel_format: String,
+    pixels_buffer: Vec<u8>,
+}
+
+impl From<liteparse::PageRaster> for PyPageRaster {
+    fn from(raster: liteparse::PageRaster) -> Self {
+        Self {
+            page_num: raster.page_num,
+            width: raster.width,
+            height: raster.height,
+            stride: raster.stride,
+            pixel_format: match raster.pixel_format {
+                liteparse::RasterPixelFormat::Rgb8 => "rgb8",
+                liteparse::RasterPixelFormat::Rgbx8 => "rgbx8",
+            }
+            .to_string(),
+            pixels_buffer: raster.pixels,
+        }
+    }
+}
+
+#[pymethods]
+impl PyPageRaster {
+    #[getter]
+    fn pixels<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.pixels_buffer)
+    }
+}
+
+/// A PDF kept open for repeated parsing and raw page rastering.
+#[pyclass(name = "_OpenDocument")]
+struct PyOpenDocument {
+    inner: std::sync::Arc<liteparse::OpenDocument>,
+    runtime: std::sync::Arc<tokio::runtime::Runtime>,
+    extract_text_metadata: bool,
+}
+
+#[pymethods]
+impl PyOpenDocument {
+    #[getter]
+    fn page_count(&self) -> u32 {
+        self.inner.page_count()
+    }
+
+    fn parse(&self, py: Python<'_>) -> PyResult<PyParseResult> {
+        let result = py
+            .detach(|| self.runtime.block_on(self.inner.parse()))
+            .map_err(|error| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(error.to_string())
+            })?;
+        Ok(PyParseResult::from_rust(result, self.extract_text_metadata))
+    }
+
+    #[pyo3(signature = (page_num, *, dpi = 150.0, pixel_format = "rgb8", render_form_fields = false))]
+    fn raster_page(
+        &self,
+        py: Python<'_>,
+        page_num: u32,
+        dpi: f32,
+        pixel_format: &str,
+        render_form_fields: bool,
+    ) -> PyResult<PyPageRaster> {
+        let pixel_format = match pixel_format {
+            "rgb8" => liteparse::RasterPixelFormat::Rgb8,
+            "rgbx8" => liteparse::RasterPixelFormat::Rgbx8,
+            value => {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "unsupported raster pixel format: {value}"
+                )));
+            }
+        };
+        py.detach(|| {
+            self.inner
+                .raster_page(
+                    page_num,
+                    liteparse::PageRasterOptions {
+                        dpi,
+                        pixel_format,
+                        render_form_fields,
+                    },
+                )
+                .map(PyPageRaster::from)
+                .map_err(|error| {
+                    PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(error.to_string())
+                })
+        })
+    }
+
+    fn close(&self, py: Python<'_>) {
+        py.detach(|| self.inner.close());
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Batch parsing
 // ---------------------------------------------------------------------------
 
@@ -1653,6 +1761,16 @@ impl LiteParse {
         ))
     }
 
+    /// Open a PDF from a file path for repeated parsing and page rastering.
+    fn open_document(&self, py: Python<'_>, input: String) -> PyResult<PyOpenDocument> {
+        self.open_retained_document(py, PdfInput::Path(input))
+    }
+
+    /// Open a PDF from raw bytes for repeated parsing and page rastering.
+    fn open_document_bytes(&self, py: Python<'_>, data: Vec<u8>) -> PyResult<PyOpenDocument> {
+        self.open_retained_document(py, PdfInput::Bytes(data))
+    }
+
     /// Open a document from a file path for bounded-memory batch parsing.
     /// Internal plumbing for the wrapper's `parse_batches()` — prefer that.
     ///
@@ -1775,6 +1893,19 @@ impl LiteParse {
 }
 
 impl LiteParse {
+    fn open_retained_document(&self, py: Python<'_>, input: PdfInput) -> PyResult<PyOpenDocument> {
+        let document = py
+            .detach(|| self.inner.open_document(input))
+            .map_err(|error| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(error.to_string())
+            })?;
+        Ok(PyOpenDocument {
+            inner: std::sync::Arc::new(document),
+            runtime: self.runtime.clone(),
+            extract_text_metadata: self.config.extract_text_metadata,
+        })
+    }
+
     /// Shared body of `open_batch_session` / `open_batch_session_bytes`. Not
     /// a `#[pymethods]` entry, so it stays off the Python surface.
     fn open_session(
@@ -1869,6 +2000,8 @@ fn run_cli(args: Vec<String>) -> PyResult<()> {
 #[pymodule]
 fn _liteparse(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<LiteParse>()?;
+    m.add_class::<PyOpenDocument>()?;
+    m.add_class::<PyPageRaster>()?;
     m.add_class::<PyLiteParseConfig>()?;
     m.add_class::<PyParseResult>()?;
     m.add_class::<PyPageError>()?;

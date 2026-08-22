@@ -114,6 +114,58 @@ with open("document.pdf", "rb") as f:
 print(result.text)
 ```
 
+## Open PDFs and raw page rasters
+
+Keep a PDF open when parsing or rendering several pages. `raster_page()`
+returns tightly packed `rgb8` or `rgbx8` pixels, ready for Pillow or another
+encoder. The example keeps only four page buffers in flight and writes each
+JPEG directly to disk:
+
+```python
+import asyncio
+from pathlib import Path
+
+from PIL import Image
+from liteparse import LiteParse, PageRasterOptions
+
+parser = LiteParse(ocr_enabled=False)
+
+def save_jpeg(document, page_num: int) -> None:
+    raster = document.raster_page(
+        page_num,
+        PageRasterOptions(dpi=150, pixel_format="rgbx8"),
+    )
+    # Pillow views the four-byte rows directly. JPEG needs RGB, so that is the
+    # only format conversion; there is no PNG encode/decode intermediary.
+    image = Image.frombuffer(
+        "RGBX",
+        (raster.width, raster.height),
+        raster.pixels,
+        "raw",
+        "RGBX",
+        raster.stride,
+        1,
+    )
+    image.convert("RGB").save(Path("pages") / f"{page_num}.jpg", quality=85)
+
+async def main() -> None:
+    Path("pages").mkdir(exist_ok=True)
+    with parser.open_document("document.pdf") as document:
+        semaphore = asyncio.Semaphore(4)
+
+        async def one(page_num: int) -> None:
+            async with semaphore:
+                # PDFium rendering releases the GIL. Once raster_page returns,
+                # PDFium's lock is free while Pillow encodes on this thread.
+                await asyncio.to_thread(save_jpeg, document, page_num)
+
+        await asyncio.gather(
+            *(one(page_num) for page_num in range(1, document.page_count + 1))
+        )
+
+asyncio.run(main())
+```
+
 ## Screenshots
 
 Generate PNG screenshots of document pages:

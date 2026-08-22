@@ -12,6 +12,86 @@ use liteparse::types::{
 };
 
 // ---------------------------------------------------------------------------
+// Page raster
+// ---------------------------------------------------------------------------
+
+/// Channel layout for an unencoded page raster.
+#[napi(string_enum = "lowercase")]
+pub enum JsRasterPixelFormat {
+    /// Three tightly packed bytes per pixel: red, green, blue.
+    Rgb8,
+    /// Four tightly packed bytes per pixel: red, green, blue, opaque padding.
+    Rgbx8,
+}
+
+impl From<JsRasterPixelFormat> for liteparse::RasterPixelFormat {
+    fn from(value: JsRasterPixelFormat) -> Self {
+        match value {
+            JsRasterPixelFormat::Rgb8 => Self::Rgb8,
+            JsRasterPixelFormat::Rgbx8 => Self::Rgbx8,
+        }
+    }
+}
+
+impl From<liteparse::RasterPixelFormat> for JsRasterPixelFormat {
+    fn from(value: liteparse::RasterPixelFormat) -> Self {
+        match value {
+            liteparse::RasterPixelFormat::Rgb8 => Self::Rgb8,
+            liteparse::RasterPixelFormat::Rgbx8 => Self::Rgbx8,
+        }
+    }
+}
+
+/// Options for rendering one page to raw pixels.
+#[napi(object)]
+#[derive(Clone, Default)]
+pub struct JsPageRasterOptions {
+    /// Render resolution. Defaults to 150.
+    pub dpi: Option<f64>,
+    /// Pixel layout. Defaults to `rgb8`.
+    pub pixel_format: Option<JsRasterPixelFormat>,
+    /// Draw AcroForm field appearances. Defaults to false.
+    pub render_form_fields: Option<bool>,
+}
+
+impl JsPageRasterOptions {
+    pub fn into_rust(self) -> liteparse::PageRasterOptions {
+        liteparse::PageRasterOptions {
+            dpi: self.dpi.unwrap_or(150.0) as f32,
+            pixel_format: self
+                .pixel_format
+                .unwrap_or(JsRasterPixelFormat::Rgb8)
+                .into(),
+            render_form_fields: self.render_form_fields.unwrap_or(false),
+        }
+    }
+}
+
+/// One rendered page as owned, tightly packed pixels.
+#[napi(object)]
+pub struct JsPageRaster {
+    pub page_num: u32,
+    pub width: u32,
+    pub height: u32,
+    pub stride: u32,
+    pub pixel_format: JsRasterPixelFormat,
+    pub pixels: napi::bindgen_prelude::Buffer,
+}
+
+impl JsPageRaster {
+    pub fn from_rust(raster: liteparse::PageRaster) -> Self {
+        Self {
+            page_num: raster.page_num,
+            width: raster.width,
+            height: raster.height,
+            stride: raster.stride,
+            pixel_format: raster.pixel_format.into(),
+            pixels: raster.pixels.into(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
 

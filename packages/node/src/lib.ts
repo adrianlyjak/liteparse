@@ -9,6 +9,7 @@ import {
   type NativeExtractedImage,
   type NativeStructureTreeElement,
   type NativePageComplexityStats,
+  type NativeOpenDocument,
   type NativeScreenshotResult,
 } from "./native.js";
 
@@ -500,6 +501,53 @@ export interface ScreenshotResult {
   rects: ScreenshotRect[];
 }
 
+export type RasterPixelFormat = "rgb8" | "rgbx8";
+
+export interface PageRasterOptions {
+  /** Render resolution. Defaults to 150. */
+  dpi?: number;
+  /** Pixel layout. Defaults to `rgb8`. */
+  pixelFormat?: RasterPixelFormat;
+  /** Draw AcroForm field appearances. Defaults to false. */
+  renderFormFields?: boolean;
+}
+
+export interface PageRaster {
+  pageNum: number;
+  width: number;
+  height: number;
+  /** Bytes between adjacent rows. */
+  stride: number;
+  pixelFormat: RasterPixelFormat;
+  pixels: Buffer;
+}
+
+/** A PDF kept open for repeated parsing and page rastering. */
+export class OpenDocument {
+  constructor(private readonly _native: NativeOpenDocument) {}
+
+  get pageCount(): number {
+    return this._native.pageCount;
+  }
+
+  async parse(): Promise<ParseResult> {
+    return toParseResult(await this._native.parse());
+  }
+
+  /** Render one 1-based page to unencoded, tightly packed pixels. */
+  async rasterPage(
+    pageNum: number,
+    options: PageRasterOptions = {},
+  ): Promise<PageRaster> {
+    return this._native.rasterPage(pageNum, options);
+  }
+
+  /** Release the retained PDF. Safe to call more than once. */
+  async close(): Promise<void> {
+    await this._native.close();
+  }
+}
+
 /** One solid rectangle (or line) detected in a rendered page bitmap. */
 export interface ScreenshotRect {
   x: number;
@@ -699,6 +747,13 @@ export class LiteParse {
       typeof input === "string" ? input : Buffer.from(input);
     const result: NativeParseResult = await this._native.parse(nativeInput);
     return toParseResult(result);
+  }
+
+  /** Open a PDF once for repeated parsing and page rastering. */
+  async openDocument(input: LiteParseInput): Promise<OpenDocument> {
+    const nativeInput =
+      typeof input === "string" ? input : Buffer.from(input);
+    return new OpenDocument(await this._native.openDocument(nativeInput));
   }
 
   /**

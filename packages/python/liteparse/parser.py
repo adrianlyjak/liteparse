@@ -1,7 +1,7 @@
 """LiteParse Python wrapper - native Rust bindings via PyO3."""
 
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterator, List, Optional, Tuple, Union, cast
 
 from liteparse._liteparse import LiteParse as _NativeLiteParse
 from liteparse._liteparse import search_items as _native_search_items
@@ -23,6 +23,9 @@ from .types import (
     ParseBatch,
     ParseError,
     PageError,
+    PageRaster,
+    PageRasterOptions,
+    RasterPixelFormat,
     ParseResult,
     DocumentMetadata,
     ScreenshotRect,
@@ -436,6 +439,60 @@ def _convert_native_result(native_result: Any) -> ParseResult:
     )
 
 
+class OpenDocument:
+    """A PDF kept open for repeated parsing and page rastering."""
+
+    def __init__(self, native: Any):
+        self._native = native
+
+    @property
+    def page_count(self) -> int:
+        """Total pages in the source PDF."""
+        return cast(int, self._native.page_count)
+
+    def parse(self) -> ParseResult:
+        """Parse the retained PDF."""
+        try:
+            return _convert_native_result(self._native.parse())
+        except Exception as error:
+            raise ParseError(str(error)) from error
+
+    def raster_page(
+        self,
+        page_num: int,
+        options: Optional[PageRasterOptions] = None,
+    ) -> PageRaster:
+        """Render one 1-based page to unencoded, tightly packed pixels."""
+        options = options or PageRasterOptions()
+        try:
+            raster = self._native.raster_page(
+                page_num,
+                dpi=options.dpi,
+                pixel_format=options.pixel_format,
+                render_form_fields=options.render_form_fields,
+            )
+        except Exception as error:
+            raise ParseError(str(error)) from error
+        return PageRaster(
+            page_num=raster.page_num,
+            width=raster.width,
+            height=raster.height,
+            stride=raster.stride,
+            pixel_format=cast(RasterPixelFormat, raster.pixel_format),
+            pixels=raster.pixels,
+        )
+
+    def close(self) -> None:
+        """Release the retained PDF. Safe to call more than once."""
+        self._native.close()
+
+    def __enter__(self) -> "OpenDocument":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+
 class LiteParse:
     """
     Python wrapper for the LiteParse document parser.
@@ -569,7 +626,7 @@ class LiteParse:
             extract_vector_graphics: Expose page-scoped vector shapes and
                 merged horizontal/vertical line segments. Default False.
         """
-        kwargs = {}
+        kwargs: Dict[str, Any] = {}
         if ocr_enabled is not None:
             kwargs["ocr_enabled"] = ocr_enabled
         if ocr_server_url is not None:
@@ -646,6 +703,25 @@ class LiteParse:
             kwargs["extract_vector_graphics"] = extract_vector_graphics
 
         self._native = _NativeLiteParse(**kwargs)
+
+    def open_document(
+        self,
+        file_data: Union[str, Path, bytes],
+    ) -> OpenDocument:
+        """Open a PDF once for repeated parsing and page rastering."""
+        try:
+            if isinstance(file_data, bytes):
+                native = self._native.open_document_bytes(file_data)
+            else:
+                file_path = Path(file_data)
+                if not file_path.exists():
+                    raise FileNotFoundError(f"File not found: {file_path}")
+                native = self._native.open_document(str(file_path.absolute()))
+            return OpenDocument(native)
+        except FileNotFoundError:
+            raise
+        except Exception as error:
+            raise ParseError(str(error)) from error
 
     def parse(
         self,
