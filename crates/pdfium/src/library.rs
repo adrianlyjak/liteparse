@@ -114,8 +114,8 @@ impl Library {
 
     /// Load a PDF from a borrowed byte buffer.
     ///
-    /// PDFium reads from the buffer lazily, so the returned document borrows
-    /// both this locked library and `data` for the same lifetime:
+    /// PDFium reads from the buffer lazily. The return type ties the document
+    /// to both this locked library and `data`:
     ///
     /// ```compile_fail
     /// use liteparse_pdfium::Library;

@@ -16,8 +16,8 @@ use pdfium::{
 /// Open a PDF from path or bytes with an optional password.
 ///
 /// The returned [`Document`] borrows from the provided [`Library`] and input.
-/// The library holds the process-global PDFium lock, while byte inputs must
-/// remain alive because PDFium reads from them lazily.
+/// The library holds the process-global PDFium lock. Byte inputs must remain
+/// alive because PDFium reads from them lazily.
 pub(crate) fn load_document_from_input<'lib>(
     lib: &'lib Library,
     input: &'lib PdfInput,

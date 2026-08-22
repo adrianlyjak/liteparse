@@ -232,8 +232,9 @@ struct PdfTransaction<'a> {
     resolved: &'a ResolvedInput,
 }
 
-/// Lend transaction-scoped PDFium access without imposing async task
-/// ownership bounds on the operation or its result.
+/// Run an operation while a PDFium transaction is active.
+///
+/// The higher-ranked closure prevents borrowed PDFium handles from escaping.
 trait DocumentAccess {
     fn transact<T, F>(&self, operation: F) -> Result<T, LiteParseError>
     where
