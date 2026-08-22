@@ -60,10 +60,12 @@ pub struct PageRaster {
 /// Render one page from an already-selected document to owned raw pixels.
 pub(crate) fn render_page_raster(
     document: &pdfium::Document,
+    form: Option<&pdfium::FormEnvironment<'_, '_>>,
     page_num: u32,
-    options: PageRasterOptions,
+    dpi: f32,
+    pixel_format: RasterPixelFormat,
 ) -> Result<PageRaster, LiteParseError> {
-    if !options.dpi.is_finite() || options.dpi <= 0.0 {
+    if !dpi.is_finite() || dpi <= 0.0 {
         return Err(LiteParseError::Config(
             "raster dpi must be a positive finite number".to_string(),
         ));
@@ -76,20 +78,16 @@ pub(crate) fn render_page_raster(
         )));
     }
 
-    let form = options
-        .render_form_fields
-        .then(|| document.form_environment())
-        .flatten();
-    if let Some(form) = form.as_ref() {
+    if let Some(form) = form {
         form.run_document_actions();
     }
     let page = document.page((page_num - 1) as i32)?;
-    let bitmap = page.render_with_form(options.dpi, form.as_ref())?;
+    let bitmap = page.render_with_form(dpi, form)?;
     let width = u32::try_from(bitmap.width())
         .map_err(|_| LiteParseError::Other("invalid raster width".to_string()))?;
     let height = u32::try_from(bitmap.height())
         .map_err(|_| LiteParseError::Other("invalid raster height".to_string()))?;
-    let (channels, pixels) = match options.pixel_format {
+    let (channels, pixels) = match pixel_format {
         RasterPixelFormat::Rgb8 => (3, bitmap.to_rgb()),
         RasterPixelFormat::Rgbx8 => (4, bitmap.to_rgbx()),
     };
@@ -112,7 +110,7 @@ pub(crate) fn render_page_raster(
         width,
         height,
         stride,
-        pixel_format: options.pixel_format,
+        pixel_format,
         pixels,
     })
 }
