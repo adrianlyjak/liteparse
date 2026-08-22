@@ -22,17 +22,21 @@ pub struct RenderedPage {
 /// Channel layout for an unencoded page raster.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RasterPixelFormat {
-    /// Three tightly-packed bytes per pixel: red, green, blue.
+    /// Three tightly packed bytes per pixel: red, green, blue.
     Rgb8,
-    /// Four tightly-packed bytes per pixel: red, green, blue, opaque padding.
+    /// Four tightly packed bytes per pixel: red, green, blue, opaque padding.
+    /// The fourth byte is not an alpha channel.
     Rgbx8,
 }
 
 /// Options for rendering one page to an unencoded pixel buffer.
 #[derive(Debug, Clone, Copy)]
 pub struct PageRasterOptions {
+    /// Render resolution in dots per inch.
     pub dpi: f32,
+    /// Channel layout for the returned pixels.
     pub pixel_format: RasterPixelFormat,
+    /// Draw AcroForm field appearances into the raster.
     pub render_form_fields: bool,
 }
 
@@ -46,18 +50,20 @@ impl Default for PageRasterOptions {
     }
 }
 
-/// One rendered page as owned, tightly-packed pixels.
+/// One rendered page as owned, tightly packed pixels.
 #[derive(Debug, Clone)]
 pub struct PageRaster {
+    /// 1-based source page number.
     pub page_num: u32,
     pub width: u32,
     pub height: u32,
+    /// Bytes between adjacent rows.
     pub stride: u32,
     pub pixel_format: RasterPixelFormat,
     pub pixels: Vec<u8>,
 }
 
-/// Render one page from an already-selected document to owned raw pixels.
+/// Render one page from an open document into an owned pixel buffer.
 pub(crate) fn render_page_raster(
     document: &pdfium::Document,
     form: Option<&pdfium::FormEnvironment<'_, '_>>,

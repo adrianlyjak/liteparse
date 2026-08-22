@@ -21,6 +21,7 @@ pub enum JsRasterPixelFormat {
     /// Three tightly packed bytes per pixel: red, green, blue.
     Rgb8,
     /// Four tightly packed bytes per pixel: red, green, blue, opaque padding.
+    /// The fourth byte is not an alpha channel.
     Rgbx8,
 }
 
@@ -75,6 +76,7 @@ pub struct JsPageRaster {
     pub height: u32,
     pub stride: u32,
     pub pixel_format: JsRasterPixelFormat,
+    /// Pixel bytes in the declared channel layout.
     pub pixels: napi::bindgen_prelude::Buffer,
 }
 

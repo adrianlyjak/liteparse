@@ -524,12 +524,14 @@ export interface PageRasterOptions {
 }
 
 export interface PageRaster {
+  /** 1-based source page number. */
   pageNum: number;
   width: number;
   height: number;
   /** Bytes between adjacent rows. */
   stride: number;
   pixelFormat: RasterPixelFormat;
+  /** Pixel bytes in the declared channel layout. */
   pixels: Buffer;
 }
 

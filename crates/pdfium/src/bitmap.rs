@@ -139,7 +139,7 @@ impl<'lib> Bitmap<'lib> {
         rgb
     }
 
-    /// Convert the BGRA buffer to tightly-packed RGBX with an opaque padding
+    /// Convert the BGRA buffer to tightly packed RGBX with an opaque padding
     /// byte, suitable for consumers that prefer four-byte pixel alignment.
     pub fn to_rgbx(&self) -> Vec<u8> {
         let width = self.width() as usize;

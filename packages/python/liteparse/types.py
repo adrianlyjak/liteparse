@@ -382,19 +382,25 @@ RasterPixelFormat = Literal["rgb8", "rgbx8"]
 @dataclass(frozen=True)
 class PageRasterOptions:
     """Options for rendering one PDF page to unencoded pixels."""
+    #: Render resolution in dots per inch.
     dpi: float = 150.0
+    #: Channel layout for the returned pixels.
     pixel_format: RasterPixelFormat = "rgb8"
+    #: Draw AcroForm field appearances into the raster.
     render_form_fields: bool = False
 
 
 @dataclass(frozen=True)
 class PageRaster:
     """One rendered page as owned, tightly packed pixels."""
+    #: 1-based source page number.
     page_num: int
     width: int
     height: int
+    #: Bytes between adjacent rows.
     stride: int
     pixel_format: RasterPixelFormat
+    #: Pixel bytes in the declared channel layout.
     pixels: bytes
 
 
