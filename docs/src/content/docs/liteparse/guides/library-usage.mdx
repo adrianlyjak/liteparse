@@ -106,11 +106,13 @@ const result2 = await parser.parse(buffer);
 
 ### Keeping a document open
 
-Open a document once when you need to parse several page selections. Supported
-office and image inputs are converted to a temporary PDF once. The temporary
-file remains alive until `close()` finishes.
+Open a document once when you need to parse or render several page selections.
+Supported office and image inputs are converted to a temporary PDF once. The
+temporary file remains alive until `close()` finishes.
 
 ```typescript
+import { writeFile } from "node:fs/promises";
+
 const parser = new LiteParse({ ocrEnabled: false });
 const document = await parser.openDocument("document.pdf");
 
@@ -118,6 +120,12 @@ try {
   console.log(document.pageCount);
   const firstPages = await document.parsePages([1, 2]);
   const laterPages = await document.parsePages([10, 11]);
+  const screenshots = await document.screenshotPages([1, 2]);
+  await Promise.all(
+    screenshots.map((page) =>
+      writeFile(`page_${page.pageNum}.png`, page.imageBuffer),
+    ),
+  );
 } finally {
   await document.close();
 }
@@ -219,9 +227,10 @@ print(result.text)
 
 ### Keeping a document open
 
-Open a document once when you need to parse several page selections. Supported
-office and image inputs are converted to a temporary PDF once. The context
-manager closes the document and removes the temporary file when the block exits.
+Open a document once when you need to parse or render several page selections.
+Supported office and image inputs are converted to a temporary PDF once. The
+context manager closes the document and removes the temporary file when the
+block exits.
 
 ```python
 parser = LiteParse(ocr_enabled=False)
@@ -230,6 +239,9 @@ with parser.open_document("document.pdf") as document:
     print(document.page_count)
     first_pages = document.parse_pages([1, 2])
     later_pages = document.parse_pages([10, 11])
+    for screenshot in document.screenshot_pages([1, 2]):
+        with open(f"page_{screenshot.page_num}.png", "wb") as output:
+            output.write(screenshot.image_bytes)
 ```
 
 ### Screenshots
@@ -295,10 +307,10 @@ let result = parser.parse_input(PdfInput::Bytes(pdf_bytes)).await?;
 
 ### Keeping a document open
 
-Open a document once when you need to parse several page selections. Native
-builds convert supported office and image inputs to a temporary PDF once. The
-temporary file remains alive until `close()` finishes. WASM accepts PDF bytes
-only.
+Open a document once when you need to parse or render several page selections.
+Native builds convert supported office and image inputs to a temporary PDF once.
+The temporary file remains alive until `close()` finishes. WASM accepts PDF
+bytes only.
 
 ```rust
 use liteparse::types::PdfInput;
@@ -312,6 +324,12 @@ let document = parser
 println!("{} pages", document.page_count());
 let first_pages = document.parse_pages([1, 2]).await?;
 let later_pages = document.parse_pages([10, 11]).await?;
+for screenshot in document.screenshot_pages([1, 2])? {
+    std::fs::write(
+        format!("page_{}.png", screenshot.page_num),
+        screenshot.image_bytes,
+    )?;
+}
 document.close();
 ```
 

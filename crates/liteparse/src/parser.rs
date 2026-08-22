@@ -1515,8 +1515,8 @@ impl OpenDocument {
     }
 
     fn validate_page_selection(&self, page_numbers: &[u32]) -> Result<(), LiteParseError> {
-        // Preserve the retained-handle contract: once closed, every operation
-        // reports that state before validating its own arguments.
+        // Closed state takes precedence over argument validation for every
+        // operation on the retained document.
         self.ensure_open()?;
 
         if page_numbers.is_empty() {
@@ -1581,8 +1581,8 @@ impl OpenDocument {
 
     /// Render explicit 1-based source pages as PNG screenshots.
     ///
-    /// The selection must be nonempty and entirely within the document.
-    /// Caller order and duplicate page numbers are preserved.
+    /// The selection must be nonempty and entirely within the document. The
+    /// result preserves input order and duplicate page numbers.
     pub fn screenshot_pages<P>(
         &self,
         page_numbers: P,

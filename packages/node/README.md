@@ -152,8 +152,8 @@ console.log(result.text);
 
 ## Keep a Document Open
 
-Open a document once when you need to parse several page selections. Supported
-non-PDF inputs are converted to a temporary PDF once:
+Open a document once when you need to parse or render several page selections.
+Supported non-PDF inputs are converted to a temporary PDF once:
 
 ```typescript
 import { LiteParse } from '@llamaindex/liteparse';
