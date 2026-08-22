@@ -14,6 +14,7 @@ pub use parser::{
     DocumentOperations, LiteParse, OpenDocument, ParseBatch, ParseResult, ParseSession,
     ScreenshotResult,
 };
+pub use render::{PageRaster, PageRasterOptions, RasterPixelFormat};
 pub use search::{SearchOptions, search_items};
 pub use types::{DocumentMetadata, ParsedPage, TextItem, WordBox};
 

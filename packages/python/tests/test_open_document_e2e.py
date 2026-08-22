@@ -1,10 +1,15 @@
-"""Retained PDF Python API coverage."""
+"""Retained PDF and raw-raster Python API coverage."""
 
 from pathlib import Path
 
 import pytest
 
-from liteparse import LiteParse, OpenDocument, ParseError
+from liteparse import (
+    LiteParse,
+    OpenDocument,
+    PageRasterOptions,
+    ParseError,
+)
 from liteparse.parser import _DOCUMENT_OPERATION_NAMES
 
 
@@ -176,3 +181,24 @@ def test_screenshot_pages_rejects_closed_document(
 
     with pytest.raises(ParseError, match="document is closed"):
         document.screenshot_pages([1])
+
+
+def test_open_document_raster_formats(parser: LiteParse, sample_pdf: Path) -> None:
+    with parser.open_document(sample_pdf) as document:
+        rgb = document.raster_page(1, PageRasterOptions(dpi=36, pixel_format="rgb8"))
+        rgbx = document.raster_page(1, PageRasterOptions(dpi=36, pixel_format="rgbx8"))
+
+    assert (rgb.width, rgb.height) == (rgbx.width, rgbx.height)
+    assert rgb.stride == rgb.width * 3
+    assert rgbx.stride == rgbx.width * 4
+    assert len(rgb.pixels) == rgb.stride * rgb.height
+    assert len(rgbx.pixels) == rgbx.stride * rgbx.height
+
+
+def test_closed_document_rejects_work(parser: LiteParse, sample_pdf: Path) -> None:
+    document = parser.open_document(sample_pdf)
+    document.close()
+    document.close()
+
+    with pytest.raises(ParseError, match="document is closed"):
+        document.raster_page(1)

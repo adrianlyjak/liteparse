@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, Iterator, List, Optional, Tuple, Union
+from typing import Dict, Iterator, List, Literal, Optional, Tuple, Union
 
 
 @dataclass
@@ -374,6 +374,28 @@ class ScreenshotResult:
     #: Solid rectangles/lines detected in the raster. Populated only when
     #: ``detect_screenshot_rects=True``.
     rects: List[ScreenshotRect] = field(default_factory=list)
+
+
+RasterPixelFormat = Literal["rgb8", "rgbx8"]
+
+
+@dataclass(frozen=True)
+class PageRasterOptions:
+    """Options for rendering one PDF page to unencoded pixels."""
+    dpi: float = 150.0
+    pixel_format: RasterPixelFormat = "rgb8"
+    render_form_fields: bool = False
+
+
+@dataclass(frozen=True)
+class PageRaster:
+    """One rendered page as owned, tightly packed pixels."""
+    page_num: int
+    width: int
+    height: int
+    stride: int
+    pixel_format: RasterPixelFormat
+    pixels: bytes
 
 
 @dataclass

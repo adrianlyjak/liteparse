@@ -308,6 +308,23 @@ export interface NativeScreenshotResult {
   rects: NativeScreenshotRect[];
 }
 
+export type NativeRasterPixelFormat = "rgb8" | "rgbx8";
+
+export interface NativePageRasterOptions {
+  dpi?: number;
+  pixelFormat?: NativeRasterPixelFormat;
+  renderFormFields?: boolean;
+}
+
+export interface NativePageRaster {
+  pageNum: number;
+  width: number;
+  height: number;
+  stride: number;
+  pixelFormat: NativeRasterPixelFormat;
+  pixels: Buffer;
+}
+
 export interface NativeDocumentOperations {
   parse(): Promise<NativeParseResult>;
   parsePages(pageNumbers: number[]): Promise<NativeParseResult>;
@@ -316,6 +333,10 @@ export interface NativeDocumentOperations {
 
 export interface NativeOpenDocument extends NativeDocumentOperations {
   readonly pageCount: number;
+  rasterPage(
+    pageNum: number,
+    options?: NativePageRasterOptions,
+  ): Promise<NativePageRaster>;
   reopen(): Promise<void>;
   close(): Promise<void>;
 }

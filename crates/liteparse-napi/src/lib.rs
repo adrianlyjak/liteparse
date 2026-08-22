@@ -4,8 +4,8 @@ use napi_derive::napi;
 mod types;
 
 use types::{
-    JsLiteParseConfig, JsPageComplexityStats, JsPageInput, JsParseBatch, JsParseResult,
-    JsScreenshotResult, JsTextItem,
+    JsLiteParseConfig, JsPageComplexityStats, JsPageInput, JsPageRaster, JsPageRasterOptions,
+    JsParseBatch, JsParseResult, JsScreenshotResult, JsTextItem,
 };
 
 fn page_numbers_from_js(page_numbers: Vec<f64>) -> Result<Vec<u32>> {
@@ -285,6 +285,20 @@ impl OpenDocument {
         })
     }
 
+    /// Render one 1-based page to an owned, unencoded pixel buffer.
+    #[napi(ts_return_type = "Promise<JsPageRaster>")]
+    pub fn raster_page(
+        &self,
+        page_num: u32,
+        options: Option<JsPageRasterOptions>,
+    ) -> AsyncTask<RasterPageTask> {
+        AsyncTask::new(RasterPageTask {
+            document: self.inner.clone(),
+            page_num,
+            options: options.unwrap_or_default(),
+        })
+    }
+
     /// Reopen the PDFium document while retaining the normalized PDF.
     #[napi(ts_return_type = "Promise<void>")]
     pub fn reopen(&self) -> AsyncTask<DocumentTask> {
@@ -326,6 +340,28 @@ impl Task for ScreenshotPagesTask {
             .into_iter()
             .map(JsScreenshotResult::from)
             .collect())
+    }
+}
+
+pub struct RasterPageTask {
+    document: std::sync::Arc<liteparse::OpenDocument>,
+    page_num: u32,
+    options: JsPageRasterOptions,
+}
+
+#[napi]
+impl Task for RasterPageTask {
+    type Output = liteparse::PageRaster;
+    type JsValue = JsPageRaster;
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        self.document
+            .raster_page(self.page_num, self.options.clone().into_rust())
+            .map_err(|error| Error::from_reason(error.to_string()))
+    }
+
+    fn resolve(&mut self, _env: Env, raster: Self::Output) -> Result<Self::JsValue> {
+        Ok(JsPageRaster::from_rust(raster))
     }
 }
 

@@ -512,6 +512,27 @@ export interface DocumentOperations<SourceArgs extends unknown[]> {
   ): Promise<ScreenshotResult[]>;
 }
 
+export type RasterPixelFormat = "rgb8" | "rgbx8";
+
+export interface PageRasterOptions {
+  /** Render resolution. Defaults to 150. */
+  dpi?: number;
+  /** Pixel layout. Defaults to `rgb8`. */
+  pixelFormat?: RasterPixelFormat;
+  /** Draw AcroForm field appearances. Defaults to false. */
+  renderFormFields?: boolean;
+}
+
+export interface PageRaster {
+  pageNum: number;
+  width: number;
+  height: number;
+  /** Bytes between adjacent rows. */
+  stride: number;
+  pixelFormat: RasterPixelFormat;
+  pixels: Buffer;
+}
+
 /** A document normalized to PDF and kept open for repeated page operations. */
 export class OpenDocument implements DocumentOperations<[]> {
   constructor(private readonly _native: NativeOpenDocument) {}
@@ -535,6 +556,14 @@ export class OpenDocument implements DocumentOperations<[]> {
   ): Promise<ScreenshotResult[]> {
     const results = await this._native.screenshotPages(Array.from(pageNumbers));
     return results.map(toScreenshot);
+  }
+
+  /** Render one 1-based page to unencoded, tightly packed pixels. */
+  async rasterPage(
+    pageNum: number,
+    options: PageRasterOptions = {},
+  ): Promise<PageRaster> {
+    return this._native.rasterPage(pageNum, options);
   }
 
   /** Release PDFium caches and reopen the normalized PDF. */

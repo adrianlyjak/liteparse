@@ -23,6 +23,9 @@ from .types import (
     ParseBatch,
     ParseError,
     PageError,
+    PageRaster,
+    PageRasterOptions,
+    RasterPixelFormat,
     ParseResult,
     DocumentMetadata,
     ScreenshotRect,
@@ -483,6 +486,31 @@ class OpenDocument:
             ]
         except Exception as error:
             raise ParseError(str(error)) from error
+
+    def raster_page(
+        self,
+        page_num: int,
+        options: Optional[PageRasterOptions] = None,
+    ) -> PageRaster:
+        """Render one 1-based page to unencoded, tightly packed pixels."""
+        options = options or PageRasterOptions()
+        try:
+            raster = self._native.raster_page(
+                page_num,
+                dpi=options.dpi,
+                pixel_format=options.pixel_format,
+                render_form_fields=options.render_form_fields,
+            )
+        except Exception as error:
+            raise ParseError(str(error)) from error
+        return PageRaster(
+            page_num=raster.page_num,
+            width=raster.width,
+            height=raster.height,
+            stride=raster.stride,
+            pixel_format=cast(RasterPixelFormat, raster.pixel_format),
+            pixels=raster.pixels,
+        )
 
     def close(self) -> None:
         """Release the retained document. Safe to call more than once."""

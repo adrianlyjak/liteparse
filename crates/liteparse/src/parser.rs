@@ -12,6 +12,7 @@ use crate::ocr_merge;
 use crate::output::markdown;
 use crate::projection;
 use crate::render;
+use crate::render::{PageRaster, PageRasterOptions};
 use crate::types::{
     DocumentMetadata, ExtractedImage, OutlineTarget, Page, PageError, ParsedPage, PdfInput,
     ScreenshotRect, XfaPacket,
@@ -598,6 +599,37 @@ fn validate_screenshot_page_numbers(
         }
     }
     Ok(())
+}
+
+fn raster_transaction(
+    parser: &LiteParse,
+    transaction: PdfTransaction<'_>,
+    page_num: u32,
+    options: PageRasterOptions,
+) -> Result<PageRaster, LiteParseError> {
+    with_render_document(
+        parser,
+        transaction,
+        options.render_form_fields,
+        |document| {
+            let form = if options.render_form_fields && document.form_type() != 0 {
+                Some(
+                    document
+                        .form_environment()
+                        .ok_or(pdfium::PdfiumError::OperationFailed)?,
+                )
+            } else {
+                None
+            };
+            render::render_page_raster(
+                document,
+                form.as_ref(),
+                page_num,
+                options.dpi,
+                options.pixel_format,
+            )
+        },
+    )
 }
 
 fn extract_loaded_document(
@@ -1663,6 +1695,17 @@ impl OpenDocument {
         })
     }
 
+    /// Render one 1-based page to an owned, unencoded pixel buffer.
+    pub fn raster_page(
+        &self,
+        page_num: u32,
+        options: PageRasterOptions,
+    ) -> Result<PageRaster, LiteParseError> {
+        self.transact(|transaction| {
+            raster_transaction(&self.parser, transaction, page_num, options)
+        })
+    }
+
     /// Reopen the PDFium document while retaining the normalized PDF.
     ///
     /// This releases document-level PDFium caches without repeating input
@@ -2133,7 +2176,10 @@ mod tests {
         closed_rx.recv_timeout(Duration::from_secs(5)).unwrap();
         closing.join().unwrap();
         assert_eq!(
-            document.transact(|_| Ok(())).unwrap_err().to_string(),
+            document
+                .raster_page(1, PageRasterOptions::default())
+                .unwrap_err()
+                .to_string(),
             "document is closed"
         );
     }
@@ -2152,6 +2198,11 @@ mod tests {
         .unwrap();
 
         assert!(document.outline.get().is_none());
+        document
+            .raster_page(1, PageRasterOptions::default())
+            .unwrap();
+        assert!(document.outline.get().is_none());
+
         document.parse().await.unwrap();
         assert!(document.outline.get().is_some());
     }
