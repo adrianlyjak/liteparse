@@ -985,7 +985,7 @@ mod open_document {
             assert_eq!(error.to_string(), expected);
         }
 
-        let parsed = document.parse_pages(vec![2]).await.unwrap();
+        let parsed = document.parse_pages(&[2]).await.unwrap();
         assert_eq!(
             parsed
                 .pages

@@ -1499,15 +1499,15 @@ impl OpenDocument {
     /// are sorted and deduplicated into source order, then limited by the
     /// parser's `max_pages` configuration. This explicit selection ignores the
     /// parser's configured `target_pages`.
-    pub async fn parse_pages<I>(&self, page_numbers: I) -> Result<ParseResult, LiteParseError>
+    pub async fn parse_pages<P>(&self, page_numbers: P) -> Result<ParseResult, LiteParseError>
     where
-        I: IntoIterator<Item = u32>,
+        P: AsRef<[u32]>,
     {
         // Preserve the retained-handle contract: once closed, every operation
         // reports that state before validating its own arguments.
         self.ensure_open()?;
 
-        let mut page_numbers: Vec<u32> = page_numbers.into_iter().collect();
+        let mut page_numbers = page_numbers.as_ref().to_vec();
         if page_numbers.is_empty() {
             return Err(LiteParseError::Other(
                 "page selection cannot be empty".to_string(),
