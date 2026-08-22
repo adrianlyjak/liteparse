@@ -895,8 +895,6 @@ async fn test_ocr_rounds_fill_across_sparse_pages() {
 
 mod open_document {
     use super::*;
-    use liteparse::{PageRasterOptions, RasterPixelFormat};
-    use std::sync::Arc;
     use std::time::Duration;
 
     const SAMPLE_PDF: &str = "../../integration_tests_data/sample.pdf";
@@ -946,13 +944,6 @@ mod open_document {
             Err(error) => error,
         };
         assert_eq!(parse_error.to_string(), "document is closed");
-        assert_eq!(
-            document
-                .raster_page(1, PageRasterOptions::default())
-                .unwrap_err()
-                .to_string(),
-            "document is closed"
-        );
     }
 
     #[test]
@@ -970,7 +961,7 @@ mod open_document {
 
     #[tokio::test]
     #[serial]
-    async fn form_parse_matches_one_shot_and_render_is_stable() {
+    async fn form_parse_matches_one_shot_and_is_stable() {
         let parser = LiteParse::new(LiteParseConfig {
             ocr_enabled: false,
             quiet: true,
@@ -982,37 +973,7 @@ mod open_document {
             .open_document(PdfInput::Path(ACROFORM_PDF.into()))
             .unwrap();
         let first = document.parse().await.unwrap();
-        let first_raster = document
-            .raster_page(
-                1,
-                PageRasterOptions {
-                    dpi: 36.0,
-                    pixel_format: RasterPixelFormat::Rgb8,
-                    render_form_fields: true,
-                },
-            )
-            .unwrap();
         let second = document.parse().await.unwrap();
-        let second_raster = document
-            .raster_page(
-                1,
-                PageRasterOptions {
-                    dpi: 36.0,
-                    pixel_format: RasterPixelFormat::Rgb8,
-                    render_form_fields: true,
-                },
-            )
-            .unwrap();
-        let raster_without_forms = document
-            .raster_page(
-                1,
-                PageRasterOptions {
-                    dpi: 36.0,
-                    pixel_format: RasterPixelFormat::Rgb8,
-                    render_form_fields: false,
-                },
-            )
-            .unwrap();
 
         assert_eq!(first.text, expected.text);
         assert_eq!(
@@ -1024,8 +985,6 @@ mod open_document {
             serde_json::to_value(&second.pages).unwrap(),
             serde_json::to_value(&first.pages).unwrap()
         );
-        assert_eq!(second_raster.pixels, first_raster.pixels);
-        assert_ne!(first_raster.pixels, raster_without_forms.pixels);
         for expected in ["ACROFORM-CUSTOMER-7319", "2026-07-28", "NESTED-ONLY-VALUE"] {
             assert_eq!(second.text.matches(expected).count(), 1);
         }
@@ -1053,67 +1012,14 @@ mod open_document {
         worker.join().unwrap();
     }
 
-    #[test]
+    #[tokio::test]
     #[serial]
-    fn raster_is_tight_opaque_and_usable_across_threads() {
-        let document = Arc::new(
-            parser()
-                .open_document(PdfInput::Path(SAMPLE_PDF.into()))
-                .unwrap(),
-        );
-        let render = |format| {
-            let document = Arc::clone(&document);
-            std::thread::spawn(move || {
-                document.raster_page(
-                    1,
-                    PageRasterOptions {
-                        dpi: 36.0,
-                        pixel_format: format,
-                        render_form_fields: false,
-                    },
-                )
-            })
-            .join()
-            .unwrap()
-            .unwrap()
-        };
-        let rgb = render(RasterPixelFormat::Rgb8);
-        let rgbx = render(RasterPixelFormat::Rgbx8);
-
-        assert_eq!((rgb.width, rgb.height), (rgbx.width, rgbx.height));
-        assert_eq!(rgb.stride, rgb.width * 3);
-        assert_eq!(rgbx.stride, rgbx.width * 4);
-        assert_eq!(rgb.pixels.len(), rgb.stride as usize * rgb.height as usize);
-        assert_eq!(
-            rgbx.pixels.len(),
-            rgbx.stride as usize * rgbx.height as usize
-        );
-        assert!(
-            rgb.pixels
-                .chunks_exact(3)
-                .any(|pixel| pixel != [255, 255, 255])
-        );
-        for (rgb_pixel, rgbx_pixel) in rgb.pixels.chunks_exact(3).zip(rgbx.pixels.chunks_exact(4)) {
-            assert_eq!(rgb_pixel, &rgbx_pixel[..3]);
-            assert_eq!(rgbx_pixel[3], 255);
-        }
-        document.close();
-    }
-
-    #[test]
-    #[serial]
-    fn drop_closes_before_owned_bytes_are_released() {
+    async fn drop_closes_before_owned_bytes_are_released() {
         {
             let document = parser()
                 .open_document(PdfInput::Bytes(std::fs::read(SAMPLE_PDF).unwrap()))
                 .unwrap();
-            assert!(
-                !document
-                    .raster_page(1, PageRasterOptions::default())
-                    .unwrap()
-                    .pixels
-                    .is_empty()
-            );
+            assert!(!document.parse().await.unwrap().text.is_empty());
         }
 
         let next = parser()

@@ -90,8 +90,7 @@ impl<'lib> Bitmap<'lib> {
     /// Format is BGRA, row-major, with `stride()` bytes per row.
     pub fn buffer(&self) -> &[u8] {
         let ptr = unsafe { ffi!(FPDFBitmap_GetBuffer(self.handle)) };
-        let len = checked_buffer_len(self.stride(), self.height())
-            .expect("invalid PDFium bitmap buffer dimensions");
+        let len = (self.stride() * self.height()) as usize;
         unsafe { std::slice::from_raw_parts(ptr as *const u8, len) }
     }
 
@@ -139,25 +138,6 @@ impl<'lib> Bitmap<'lib> {
         rgb
     }
 
-    /// Convert the BGRA buffer to tightly-packed RGBX with an opaque padding
-    /// byte, suitable for consumers that prefer four-byte pixel alignment.
-    pub fn to_rgbx(&self) -> Vec<u8> {
-        let width = self.width() as usize;
-        let height = self.height() as usize;
-        let stride = self.stride() as usize;
-        let src = self.buffer();
-        let mut rgbx = Vec::with_capacity(width * height * 4);
-
-        for y in 0..height {
-            let row = &src[y * stride..y * stride + width * 4];
-            for pixel in row.chunks_exact(4) {
-                rgbx.extend_from_slice(&[pixel[2], pixel[1], pixel[0], 0xff]);
-            }
-        }
-
-        rgbx
-    }
-
     /// Convert the BGRA buffer to tightly-packed 8-bit grayscale (1 byte/px)
     /// using Rec. 601 luma weights.
     pub fn to_luma(&self) -> Vec<u8> {
@@ -179,31 +159,8 @@ impl<'lib> Bitmap<'lib> {
     }
 }
 
-fn checked_buffer_len(stride: i32, height: i32) -> Option<usize> {
-    let stride = usize::try_from(stride).ok()?;
-    let height = usize::try_from(height).ok()?;
-    stride
-        .checked_mul(height)
-        .filter(|&len| len <= isize::MAX as usize)
-}
-
 impl Drop for Bitmap<'_> {
     fn drop(&mut self) {
         unsafe { ffi!(FPDFBitmap_Destroy(self.handle)) };
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::checked_buffer_len;
-
-    #[test]
-    fn bitmap_buffer_length_does_not_multiply_as_i32() {
-        #[cfg(target_pointer_width = "64")]
-        assert_eq!(checked_buffer_len(i32::MAX, 2), Some(i32::MAX as usize * 2));
-        #[cfg(target_pointer_width = "32")]
-        assert_eq!(checked_buffer_len(i32::MAX, 2), None);
-        assert_eq!(checked_buffer_len(-1, 2), None);
-        assert_eq!(checked_buffer_len(1, -2), None);
     }
 }

@@ -12,7 +12,6 @@ use crate::ocr_merge;
 use crate::output::markdown;
 use crate::projection;
 use crate::render;
-use crate::render::{PageRaster, PageRasterOptions};
 use crate::types::{
     DocumentMetadata, ExtractedImage, OutlineTarget, Page, PageError, ParsedPage, PdfInput,
     ScreenshotRect, XfaPacket,
@@ -263,7 +262,7 @@ impl StoredDocument {
     }
 }
 
-/// A PDFium document retained across parse and raster calls.
+/// A PDFium document retained across parse calls.
 ///
 /// Each PDFium transaction holds the document mutex. [`OpenDocument::close`]
 /// waits for the transaction currently holding it, removes the retained
@@ -426,45 +425,6 @@ fn render_ocr_transaction(
         reflatten_pages,
     )?;
     Ok((rendered, next_start))
-}
-
-fn raster_transaction(
-    parser: &LiteParse,
-    transaction: PdfTransaction<'_>,
-    page_num: u32,
-    options: PageRasterOptions,
-) -> Result<PageRaster, LiteParseError> {
-    // Initializing and running a form environment can mutate document state.
-    // Keep the retained canonical document pristine for repeated operations.
-    let scratch = (options.render_form_fields || transaction.canonical.is_none())
-        .then(|| {
-            extract::load_document_from_input(
-                transaction.library,
-                &transaction.resolved.input,
-                parser.config.password.as_deref(),
-            )
-        })
-        .transpose()?;
-    let document = scratch
-        .as_ref()
-        .or(transaction.canonical.as_ref())
-        .expect("a PDF transaction must provide or open a document");
-    let form = if options.render_form_fields && document.form_type() != 0 {
-        Some(
-            document
-                .form_environment()
-                .ok_or(pdfium::PdfiumError::OperationFailed)?,
-        )
-    } else {
-        None
-    };
-    render::render_page_raster(
-        document,
-        form.as_ref(),
-        page_num,
-        options.dpi,
-        options.pixel_format,
-    )
 }
 
 fn extract_loaded_document(
@@ -906,7 +866,7 @@ impl LiteParse {
         .await
     }
 
-    /// Retain a PDF for repeated parse and raw-raster operations.
+    /// Retain a PDF for repeated parse operations.
     ///
     /// Unlike [`LiteParse::parse_input`], this synchronous API does not
     /// convert non-PDF inputs.
@@ -1404,17 +1364,6 @@ impl OpenDocument {
         Ok(result)
     }
 
-    /// Render one 1-based page to an owned, unencoded pixel buffer.
-    pub fn raster_page(
-        &self,
-        page_num: u32,
-        options: PageRasterOptions,
-    ) -> Result<PageRaster, LiteParseError> {
-        self.transact(|transaction| {
-            raster_transaction(&self.parser, transaction, page_num, options)
-        })
-    }
-
     /// Close the retained PDF. Calling this more than once is a no-op.
     ///
     /// Close waits for the currently active PDFium transaction, prevents new
@@ -1797,10 +1746,7 @@ mod tests {
         closed_rx.recv_timeout(Duration::from_secs(5)).unwrap();
         closing.join().unwrap();
         assert_eq!(
-            document
-                .raster_page(1, PageRasterOptions::default())
-                .unwrap_err()
-                .to_string(),
+            document.transact(|_| Ok(())).unwrap_err().to_string(),
             "document is closed"
         );
     }
@@ -1818,11 +1764,6 @@ mod tests {
         .unwrap();
 
         assert!(document.outline.get().is_none());
-        document
-            .raster_page(1, PageRasterOptions::default())
-            .unwrap();
-        assert!(document.outline.get().is_none());
-
         document.parse().await.unwrap();
         assert!(document.outline.get().is_some());
     }
