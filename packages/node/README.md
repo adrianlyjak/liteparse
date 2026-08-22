@@ -150,15 +150,15 @@ const result = await parser.parse(pdfBytes);
 console.log(result.text);
 ```
 
-## Keep a PDF open
+## Keep a PDF Open
 
-Retain a PDF when several operations need the same document:
+Open a PDF once when you need to parse several page selections:
 
 ```typescript
-import { LiteParse } from "@llamaindex/liteparse";
+import { LiteParse } from '@llamaindex/liteparse';
 
 const parser = new LiteParse({ ocrEnabled: false });
-const document = await parser.openDocument("document.pdf");
+const document = await parser.openDocument('document.pdf');
 try {
   console.log(document.pageCount);
   const result = await document.parsePages([1, 2]);

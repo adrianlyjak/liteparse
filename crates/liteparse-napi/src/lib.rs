@@ -67,7 +67,7 @@ impl LiteParse {
         Ok(JsParseResult::from_rust(&result, &self.config))
     }
 
-    /// Open a PDF once for repeated parsing.
+    /// Open a PDF for repeated page operations.
     #[napi(ts_return_type = "Promise<OpenDocument>")]
     pub fn open_document(&self, input: Either<String, Buffer>) -> AsyncTask<OpenDocumentTask> {
         let input = match input {
@@ -229,7 +229,7 @@ impl Task for OpenDocumentTask {
     }
 }
 
-/// A PDF kept open for repeated parsing.
+/// A PDF kept open for repeated page operations.
 #[napi]
 pub struct OpenDocument {
     inner: std::sync::Arc<liteparse::OpenDocument>,

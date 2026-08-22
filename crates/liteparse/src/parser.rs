@@ -316,13 +316,13 @@ impl StoredDocument {
     }
 }
 
-/// A PDFium document retained across parse calls.
+/// A PDF kept open for repeated page operations.
 ///
 /// Each PDFium transaction holds the document mutex. [`OpenDocument::close`]
 /// waits for the transaction currently holding it, removes the retained
-/// document, and prevents later transactions. An async parse can be between
-/// transactions while OCR runs; if close wins then, the parse stops when it
-/// next needs PDFium.
+/// document, and prevents later transactions. An async parse releases the
+/// document while OCR runs. If close wins then, the parse stops when it next
+/// needs PDFium.
 pub struct OpenDocument {
     stored: std::sync::Mutex<Option<StoredDocument>>,
     parser: LiteParse,
@@ -961,7 +961,7 @@ impl LiteParse {
         self.parse_pages_input(input, page_numbers).await
     }
 
-    /// Retain a PDF for repeated parse operations.
+    /// Open a PDF for repeated page operations.
     ///
     /// Unlike [`LiteParse::parse_input`], this synchronous API does not
     /// convert non-PDF inputs.

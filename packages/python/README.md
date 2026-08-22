@@ -114,9 +114,9 @@ with open("document.pdf", "rb") as f:
 print(result.text)
 ```
 
-## Keep a PDF open
+## Keep a PDF Open
 
-Retain a PDF when several operations need the same document:
+Open a PDF once when you need to parse several page selections:
 
 ```python
 from liteparse import LiteParse

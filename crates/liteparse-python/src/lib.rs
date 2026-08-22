@@ -1343,7 +1343,7 @@ impl PyLiteParseConfig {
 // Open document
 // ---------------------------------------------------------------------------
 
-/// A PDF kept open for repeated parsing.
+/// A PDF kept open for repeated page operations.
 #[pyclass(name = "_OpenDocument")]
 struct PyOpenDocument {
     inner: std::sync::Arc<liteparse::OpenDocument>,
@@ -1695,12 +1695,12 @@ impl LiteParse {
         ))
     }
 
-    /// Open a PDF from a file path for repeated parsing.
+    /// Open a PDF from a file path for repeated page operations.
     fn open_document(&self, py: Python<'_>, input: String) -> PyResult<PyOpenDocument> {
         self.open_retained_document(py, PdfInput::Path(input))
     }
 
-    /// Open a PDF from raw bytes for repeated parsing.
+    /// Open a PDF from raw bytes for repeated page operations.
     fn open_document_bytes(&self, py: Python<'_>, data: Vec<u8>) -> PyResult<PyOpenDocument> {
         self.open_retained_document(py, PdfInput::Bytes(data))
     }
