@@ -17,6 +17,14 @@ try {
     result.pages.map((page) => page.pageNum),
     [1, 3],
   );
+  await assert.rejects(
+    document.parsePages([1.5]),
+    /page number must be a finite integer/,
+  );
+  await assert.rejects(
+    document.parsePages([2 ** 32 + 1]),
+    /page number must be a finite integer/,
+  );
 } finally {
   await document.close();
 }

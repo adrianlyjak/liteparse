@@ -8,6 +8,25 @@ use types::{
     JsScreenshotResult, JsTextItem,
 };
 
+fn page_numbers_from_js(page_numbers: Vec<f64>) -> Result<Vec<u32>> {
+    page_numbers
+        .into_iter()
+        .map(|page_number| {
+            if page_number.is_finite()
+                && page_number.fract() == 0.0
+                && page_number >= 0.0
+                && page_number <= u32::MAX as f64
+            {
+                Ok(page_number as u32)
+            } else {
+                Err(Error::from_reason(format!(
+                    "page number must be a finite integer representable as u32: {page_number}"
+                )))
+            }
+        })
+        .collect()
+}
+
 /// Main LiteParse parser class.
 #[napi]
 pub struct LiteParse {
@@ -238,7 +257,8 @@ impl OpenDocument {
 
     /// Parse an explicit set of 1-based source pages.
     #[napi]
-    pub async fn parse_pages(&self, page_numbers: Vec<u32>) -> Result<JsParseResult> {
+    pub async fn parse_pages(&self, page_numbers: Vec<f64>) -> Result<JsParseResult> {
+        let page_numbers = page_numbers_from_js(page_numbers)?;
         let result = self
             .inner
             .parse_pages(page_numbers)
