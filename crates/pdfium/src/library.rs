@@ -112,11 +112,25 @@ impl Library {
         })
     }
 
-    pub fn load_document_from_bytes(
-        &self,
-        data: &[u8],
+    /// Load a PDF from a borrowed byte buffer.
+    ///
+    /// PDFium reads from the buffer lazily, so the returned document borrows
+    /// both this locked library and `data` for the same lifetime:
+    ///
+    /// ```compile_fail
+    /// use liteparse_pdfium::Library;
+    /// let library = Library::init();
+    /// let document = {
+    ///     let data = vec![0_u8; 8];
+    ///     library.load_document_from_bytes(&data, None).unwrap()
+    /// };
+    /// let _ = document.page_count();
+    /// ```
+    pub fn load_document_from_bytes<'document>(
+        &'document self,
+        data: &'document [u8],
         password: Option<&str>,
-    ) -> Result<Document<'_>, PdfiumError> {
+    ) -> Result<Document<'document>, PdfiumError> {
         let c_password = password
             .map(|p| CString::new(p).map_err(|_| PdfiumError::OperationFailed))
             .transpose()?;
@@ -133,10 +147,6 @@ impl Library {
             return Err(PdfiumError::from_last_error());
         }
 
-        // SAFETY: pdfium requires the data buffer to outlive the document.
-        // The caller must ensure `data` lives long enough. For owned data,
-        // consider passing a Vec and having the Document hold it.
-        // For now, this is the caller's responsibility.
         Ok(Document {
             handle,
             _lib: std::marker::PhantomData,

@@ -201,6 +201,304 @@ impl ResolvedInput {
     }
 }
 
+struct ExtractionState {
+    pages: Vec<Page>,
+    page_errors: Vec<PageError>,
+    total_pages: u32,
+    outline: Vec<OutlineTarget>,
+    images: Vec<ExtractedImage>,
+    screenshots: Vec<ScreenshotResult>,
+    image_error_count: u32,
+    complexity: Vec<ocr_merge::PageComplexityStats>,
+    form_type: Option<i32>,
+    creator: Option<String>,
+    producer: Option<String>,
+    doc_meta: Option<DocumentMetadata>,
+    xfa_packets: Option<Vec<XfaPacket>>,
+    flattened_form_widgets: bool,
+    flattened_page_numbers: Vec<u32>,
+    repaired_input: Option<PdfInput>,
+}
+
+struct ExtractionRequest<'a> {
+    target_pages: Option<&'a [u32]>,
+    max_pages: usize,
+    outline: Option<Vec<OutlineTarget>>,
+    started_at: web_time::Instant,
+}
+
+struct PdfTransaction<'a> {
+    library: &'a Library,
+    resolved: &'a ResolvedInput,
+}
+
+/// Lend transaction-scoped PDFium access without imposing async task
+/// ownership bounds on the operation or its result.
+trait DocumentAccess {
+    fn transact<T, F>(&self, operation: F) -> Result<T, LiteParseError>
+    where
+        F: for<'a> FnOnce(PdfTransaction<'a>) -> Result<T, LiteParseError>;
+}
+
+struct ReopeningDocumentAccess<'a> {
+    resolved: &'a ResolvedInput,
+}
+
+impl DocumentAccess for ReopeningDocumentAccess<'_> {
+    fn transact<T, F>(&self, operation: F) -> Result<T, LiteParseError>
+    where
+        F: for<'a> FnOnce(PdfTransaction<'a>) -> Result<T, LiteParseError>,
+    {
+        let library = Library::init();
+        operation(PdfTransaction {
+            library: &library,
+            resolved: self.resolved,
+        })
+    }
+}
+
+fn extract_transaction(
+    parser: &LiteParse,
+    transaction: PdfTransaction<'_>,
+    request: ExtractionRequest<'_>,
+) -> Result<ExtractionState, LiteParseError> {
+    let password = parser.config.password.as_deref();
+    let validated_input = &transaction.resolved.input;
+    #[cfg(not(target_arch = "wasm32"))]
+    let repaired_input = parser
+        .config
+        .extract_form_fields
+        .then(|| {
+            crate::acroform_repair::repair_orphaned_widgets(
+                transaction.library,
+                validated_input,
+                password,
+            )
+        })
+        .flatten();
+    #[cfg(target_arch = "wasm32")]
+    let repaired_input: Option<PdfInput> = None;
+    let mut state = {
+        let document_input = repaired_input.as_ref().unwrap_or(validated_input);
+        let document =
+            extract::load_document_from_input(transaction.library, document_input, password)?;
+        let source_document = (parser.config.extract_document_metadata
+            && !transaction.resolved.is_converted()
+            && repaired_input.is_some())
+        .then(|| {
+            extract::load_document_from_input(transaction.library, validated_input, password).ok()
+        })
+        .flatten();
+
+        extract_loaded_document(
+            parser,
+            &transaction,
+            &document,
+            source_document.as_ref().unwrap_or(&document),
+            document_input,
+            request,
+        )?
+    };
+    state.repaired_input = repaired_input;
+    Ok(state)
+}
+
+fn render_ocr_transaction(
+    parser: &LiteParse,
+    transaction: PdfTransaction<'_>,
+    state: &ExtractionState,
+    round_start: usize,
+    round_rasters: usize,
+    grayscale: bool,
+    reflatten_pages: &std::collections::HashSet<u32>,
+) -> Result<(Vec<ocr_merge::RenderedPage>, usize), LiteParseError> {
+    let repaired_input = state.repaired_input.as_ref();
+    let input = repaired_input.unwrap_or(&transaction.resolved.input);
+    let document = extract::load_document_from_input(
+        transaction.library,
+        input,
+        parser.config.password.as_deref(),
+    )?;
+    let (rendered, next_start) = ocr_merge::render_pages_for_ocr(
+        &document,
+        &state.pages,
+        round_start,
+        round_rasters,
+        parser.config.dpi,
+        grayscale,
+        parser.config.render_form_fields,
+        parser.config.continue_on_page_error,
+        reflatten_pages,
+    )?;
+    Ok((rendered, next_start))
+}
+
+fn extract_loaded_document(
+    parser: &LiteParse,
+    transaction: &PdfTransaction<'_>,
+    document: &pdfium::Document<'_>,
+    source_document: &pdfium::Document<'_>,
+    document_input: &PdfInput,
+    request: ExtractionRequest<'_>,
+) -> Result<ExtractionState, LiteParseError> {
+    let ExtractionRequest {
+        target_pages,
+        max_pages,
+        outline,
+        started_at,
+    } = request;
+    let lib = transaction.library;
+    let validated_input = &transaction.resolved.input;
+    let is_converted = transaction.resolved.is_converted();
+    let total_pages = document.page_count().max(0) as u32;
+    let form_type = parser
+        .config
+        .extract_form_fields
+        .then(|| document.form_type());
+    let creator = document.meta_text("Creator");
+    let producer = document.meta_text("Producer");
+    let doc_meta = (parser.config.extract_document_metadata && !is_converted)
+        .then(|| crate::document_metadata::extract(validated_input, source_document));
+    let xfa_packets = parser.config.extract_xfa_packets.then(|| {
+        document
+            .xfa_packets()
+            .into_iter()
+            .map(|packet| XfaPacket {
+                index: packet.index.max(0) as u32,
+                name: packet.name,
+                content_length: packet
+                    .content
+                    .as_ref()
+                    .map_or(0, |content| content.len() as u32),
+                content: packet
+                    .content
+                    .map(|bytes| String::from_utf8_lossy(&bytes).into_owned()),
+            })
+            .collect::<Vec<_>>()
+    });
+    let outline = outline.unwrap_or_else(|| extract::extract_outline(document));
+    let extracted = extract::extract_pages_and_images(
+        document,
+        target_pages,
+        max_pages,
+        parser.config.extract_links
+            && parser.config.output_format == crate::config::OutputFormat::Markdown,
+        parser.glyph_resolver.as_deref(),
+        extract::ExtractionOutputOptions {
+            continue_on_page_error: parser.config.continue_on_page_error,
+            extract_content_bounds: parser.config.extract_content_bounds,
+            extract_images: parser.config.effective_extract_images(),
+            emit_word_boxes: parser.config.emit_word_boxes
+                || parser.config.output_format == crate::config::OutputFormat::Markdown,
+            extract_text_metadata: parser.config.extract_text_metadata,
+            extract_vector_graphics: parser.config.extract_vector_graphics,
+            extract_annotations: parser.config.extract_annotations,
+            extract_form_fields: parser.config.extract_form_fields,
+            extract_structure_tree: parser.config.extract_structure_tree,
+        },
+    )?;
+    let extract::ExtractedPages {
+        pages,
+        page_errors,
+        images,
+        image_error_count,
+        flattened_form_widgets,
+        flattened_page_numbers,
+    } = extracted;
+    let needs_pristine_document = flattened_form_widgets
+        && parser.config.extract_screenshots
+        && parser.config.render_form_fields;
+    let pristine_document = needs_pristine_document
+        .then(|| {
+            extract::load_document_from_input(
+                lib,
+                document_input,
+                parser.config.password.as_deref(),
+            )
+        })
+        .transpose()?;
+    let analysis_document = pristine_document.as_ref().unwrap_or(document);
+    if !parser.config.quiet {
+        eprintln!(
+            "[liteparse] extract: {:.1}ms ({} pages)",
+            web_time::Instant::now()
+                .duration_since(started_at)
+                .as_secs_f64()
+                * 1000.0,
+            pages.len()
+        );
+    }
+    let complexity = if parser.config.include_complexity {
+        let mut complexity = Vec::with_capacity(pages.len());
+        for page in &pages {
+            let stats = analysis_document
+                .page((page.page_number - 1) as i32)
+                .map_err(LiteParseError::from)
+                .and_then(|page_obj| ocr_merge::calculate_page_complexity(page, &page_obj));
+            match stats {
+                Ok(stats) => complexity.push(stats),
+                Err(error) if parser.config.continue_on_page_error => {
+                    if !parser.config.quiet {
+                        eprintln!(
+                            "[liteparse] complexity failed on page {}: {}",
+                            page.page_number, error
+                        );
+                    }
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        complexity
+    } else {
+        Vec::new()
+    };
+    let screenshots = if parser.config.extract_screenshots {
+        let page_numbers = pages
+            .iter()
+            .map(|page| page.page_number as u32)
+            .collect::<Vec<_>>();
+        render::render_document_pages(
+            analysis_document,
+            Some(&page_numbers),
+            parser.config.dpi,
+            parser.config.detect_screenshot_rects,
+            parser.config.render_form_fields,
+            parser.config.continue_on_page_error,
+        )?
+        .into_iter()
+        .map(|page| ScreenshotResult {
+            page_num: page.page_num,
+            width: page.width,
+            height: page.height,
+            image_bytes: page.png_bytes,
+            is_solid_fill: page.is_solid_fill,
+            rects: page.rects,
+        })
+        .collect()
+    } else {
+        Vec::new()
+    };
+
+    Ok(ExtractionState {
+        pages,
+        page_errors,
+        total_pages,
+        outline,
+        images,
+        screenshots,
+        image_error_count,
+        complexity,
+        form_type,
+        creator,
+        producer,
+        doc_meta,
+        xfa_packets,
+        flattened_form_widgets,
+        flattened_page_numbers,
+        repaired_input: None,
+    })
+}
+
 /// Main LiteParse orchestrator.
 ///
 /// ### Thread safety
@@ -510,6 +808,22 @@ impl LiteParse {
         max_pages: usize,
         outline: Option<Vec<OutlineTarget>>,
     ) -> Result<ParseResult, LiteParseError> {
+        self.parse_with_access(
+            &ReopeningDocumentAccess { resolved },
+            target_pages,
+            max_pages,
+            outline,
+        )
+        .await
+    }
+
+    async fn parse_with_access<T: DocumentAccess>(
+        &self,
+        access: &T,
+        target_pages: Option<&[u32]>,
+        max_pages: usize,
+        outline: Option<Vec<OutlineTarget>>,
+    ) -> Result<ParseResult, LiteParseError> {
         let log = |msg: &str| {
             if !self.config.quiet {
                 eprintln!("{}", msg);
@@ -518,18 +832,6 @@ impl LiteParse {
 
         let t0 = web_time::Instant::now();
 
-        // Provenance facts describe the file on disk, so they are meaningless
-        // for a PDF we generated ourselves from a DOCX/XLSX/image.
-        let want_doc_meta = self.config.extract_document_metadata && !resolved.is_converted();
-
-        let validated_input = &resolved.input;
-
-        // Extract text (and pre-render OCR pages in one PDF load when OCR is on).
-        // The PDFium lock is acquired for this entire critical section and
-        // released before any `.await` below — OCR (network / CPU) and grid
-        // projection (pure Rust) do not touch PDFium, so they can run
-        // concurrently with other `LiteParse` calls.
-        let password = self.config.password.as_deref();
         // Build the OCR engine up front so the renderer knows whether to emit a
         // grayscale buffer (cheaper, for engines that binarize internally) or RGB.
         let ocr_engine: Option<std::sync::Arc<dyn OcrEngine>> = if self.config.ocr_enabled {
@@ -575,10 +877,68 @@ impl LiteParse {
             None
         };
         let ocr_grayscale = ocr_engine.as_ref().is_some_and(|e| e.prefers_grayscale());
+        let mut state = access.transact(|transaction| {
+            extract_transaction(
+                self,
+                transaction,
+                ExtractionRequest {
+                    target_pages,
+                    max_pages,
+                    outline,
+                    started_at: t0,
+                },
+            )
+        })?;
+        let t1 = web_time::Instant::now();
 
+        if let Some(engine) = ocr_engine {
+            let round_rasters = self.config.num_workers.max(1);
+            // Extraction may have flattened SOME pages' form widgets into
+            // page content in its (now dropped) document instance; re-apply
+            // per round on exactly those pages so the rasters match what
+            // extraction saw. With `render_form_fields` the form environment
+            // paints the widgets instead, so no re-flatten is needed.
+            let reflatten_pages: std::collections::HashSet<u32> =
+                if state.flattened_form_widgets && !self.config.render_form_fields {
+                    state.flattened_page_numbers.iter().copied().collect()
+                } else {
+                    std::collections::HashSet::new()
+                };
+            let mut round_start = 0usize;
+            while round_start < state.pages.len() {
+                let (rendered, next_start) = access.transact(|transaction| {
+                    render_ocr_transaction(
+                        self,
+                        transaction,
+                        &state,
+                        round_start,
+                        round_rasters,
+                        ocr_grayscale,
+                        &reflatten_pages,
+                    )
+                })?;
+                round_start = next_start;
+                if rendered.is_empty() {
+                    // The scan reached the end without finding another page
+                    // that needs OCR.
+                    continue;
+                }
+                // `RenderedPage::idx` is absolute, so the whole slice is
+                // passed regardless of where this round started.
+                ocr_merge::ocr_and_merge_rendered(
+                    &mut state.pages,
+                    rendered,
+                    engine.clone(),
+                    &self.config.ocr_language,
+                    self.config.num_workers,
+                    self.config.ocr_failure_fatal,
+                )
+                .await?;
+            }
+        }
         #[allow(unused_mut)] // mutated only by the native image-output writer
-        let (
-            pages,
+        let ExtractionState {
+            mut pages,
             page_errors,
             total_pages,
             outline,
@@ -591,243 +951,8 @@ impl LiteParse {
             producer,
             doc_meta,
             xfa_packets,
-            flattened_form_widgets,
-            flattened_page_numbers,
-            repaired_input,
-        ) = {
-            let lib = Library::init();
-            #[cfg(not(target_arch = "wasm32"))]
-            let repaired_input = self
-                .config
-                .extract_form_fields
-                .then(|| {
-                    crate::acroform_repair::repair_orphaned_widgets(&lib, validated_input, password)
-                })
-                .flatten();
-            #[cfg(not(target_arch = "wasm32"))]
-            let document_input = repaired_input.as_ref().unwrap_or(validated_input);
-            #[cfg(target_arch = "wasm32")]
-            let document_input = validated_input;
-            let document = extract::load_document_from_input(&lib, document_input, password)?;
-            let total_pages = document.page_count().max(0) as u32;
-            let form_type = self
-                .config
-                .extract_form_fields
-                .then(|| document.form_type());
-            let creator = document.meta_text("Creator");
-            let producer = document.meta_text("Producer");
-            let doc_meta = want_doc_meta.then(|| {
-                // AcroForm repair rewrites the file, so provenance has to come
-                // from the original document; fall back if it no longer loads.
-                #[cfg(not(target_arch = "wasm32"))]
-                if repaired_input.is_some()
-                    && let Ok(source) =
-                        extract::load_document_from_input(&lib, validated_input, password)
-                {
-                    return crate::document_metadata::extract(validated_input, &source);
-                }
-                crate::document_metadata::extract(validated_input, &document)
-            });
-            let xfa_packets = self.config.extract_xfa_packets.then(|| {
-                document
-                    .xfa_packets()
-                    .into_iter()
-                    .map(|packet| XfaPacket {
-                        index: packet.index.max(0) as u32,
-                        name: packet.name,
-                        content_length: packet
-                            .content
-                            .as_ref()
-                            .map_or(0, |content| content.len() as u32),
-                        content: packet
-                            .content
-                            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned()),
-                    })
-                    .collect::<Vec<_>>()
-            });
-            let outline = outline.unwrap_or_else(|| extract::extract_outline(&document));
-            let extracted = extract::extract_pages_and_images(
-                &document,
-                target_pages,
-                max_pages,
-                self.config.extract_links
-                    && self.config.output_format == crate::config::OutputFormat::Markdown,
-                self.glyph_resolver.as_deref(),
-                extract::ExtractionOutputOptions {
-                    continue_on_page_error: self.config.continue_on_page_error,
-                    extract_content_bounds: self.config.extract_content_bounds,
-                    extract_images: self.config.effective_extract_images(),
-                    // The markdown table detector splits PDFium's merged
-                    // multi-cell runs on real word geometry, so it needs word
-                    // boxes even when the caller didn't ask for them.
-                    emit_word_boxes: self.config.emit_word_boxes
-                        || self.config.output_format == crate::config::OutputFormat::Markdown,
-                    extract_text_metadata: self.config.extract_text_metadata,
-                    extract_vector_graphics: self.config.extract_vector_graphics,
-                    extract_annotations: self.config.extract_annotations,
-                    extract_form_fields: self.config.extract_form_fields,
-                    extract_structure_tree: self.config.extract_structure_tree,
-                },
-            )?;
-            let extract::ExtractedPages {
-                pages,
-                page_errors,
-                images,
-                image_error_count,
-                flattened_form_widgets,
-                flattened_page_numbers,
-            } = extracted;
-            // Reopening the input costs a full parse, so it is confined to the
-            // one consumer that genuinely needs live widget annotations: the
-            // opt-in form renderer, which initializes the form environment to
-            // run document actions and paint computed field appearances that
-            // have no appearance stream to flatten.
-            //
-            // Plain rendering (screenshots) does not need it — flattening
-            // promotes the widget appearances into page content, so the
-            // raster is the same either way. Complexity likewise runs on the
-            // flattened document by design (see `is_complex`). OCR rasters
-            // render in bounded rounds after this section, each against a
-            // freshly reopened (hence pristine) document.
-            let needs_pristine_document = flattened_form_widgets
-                && self.config.extract_screenshots
-                && self.config.render_form_fields;
-            let pristine_document = needs_pristine_document
-                .then(|| extract::load_document_from_input(&lib, document_input, password))
-                .transpose()?;
-            let analysis_document = pristine_document.as_ref().unwrap_or(&document);
-            let t_extract = web_time::Instant::now();
-            log(&format!(
-                "[liteparse] extract: {:.1}ms ({} pages)",
-                t_extract.duration_since(t0).as_secs_f64() * 1000.0,
-                pages.len()
-            ));
-            let complexity = if self.config.include_complexity {
-                let mut complexity = Vec::with_capacity(pages.len());
-                for page in &pages {
-                    let stats = analysis_document
-                        .page((page.page_number - 1) as i32)
-                        .map_err(LiteParseError::from)
-                        .and_then(|page_obj| ocr_merge::calculate_page_complexity(page, &page_obj));
-                    match stats {
-                        Ok(stats) => complexity.push(stats),
-                        // The page's text is already extracted; a tolerant
-                        // parse keeps it and just leaves `complexity` unset
-                        // (stats attach by page number below).
-                        Err(error) if self.config.continue_on_page_error => log(&format!(
-                            "[liteparse] complexity failed on page {}: {}",
-                            page.page_number, error
-                        )),
-                        Err(error) => return Err(error),
-                    }
-                }
-                complexity
-            } else {
-                Vec::new()
-            };
-            let screenshots = if self.config.extract_screenshots {
-                let page_numbers = pages
-                    .iter()
-                    .map(|page| page.page_number as u32)
-                    .collect::<Vec<_>>();
-                render::render_document_pages(
-                    analysis_document,
-                    Some(&page_numbers),
-                    self.config.dpi,
-                    self.config.detect_screenshot_rects,
-                    self.config.render_form_fields,
-                    self.config.continue_on_page_error,
-                )?
-                .into_iter()
-                .map(|page| ScreenshotResult {
-                    page_num: page.page_num,
-                    width: page.width,
-                    height: page.height,
-                    image_bytes: page.png_bytes,
-                    is_solid_fill: page.is_solid_fill,
-                    rects: page.rects,
-                })
-                .collect()
-            } else {
-                Vec::new()
-            };
-            #[cfg(target_arch = "wasm32")]
-            let repaired_input: Option<crate::types::PdfInput> = None;
-            // `lib` is dropped here, releasing the PDFium lock.
-            (
-                pages,
-                page_errors,
-                total_pages,
-                outline,
-                images,
-                screenshots,
-                image_error_count,
-                complexity,
-                form_type,
-                creator,
-                producer,
-                doc_meta,
-                xfa_packets,
-                flattened_form_widgets,
-                flattened_page_numbers,
-                repaired_input,
-            )
-        };
-        let mut pages = pages;
-        let t1 = web_time::Instant::now();
-
-        if let Some(engine) = ocr_engine {
-            let round_rasters = self.config.num_workers.max(1);
-            // Extraction may have flattened SOME pages' form widgets into
-            // page content in its (now dropped) document instance; re-apply
-            // per round on exactly those pages so the rasters match what
-            // extraction saw. With `render_form_fields` the form environment
-            // paints the widgets instead, so no re-flatten is needed.
-            let reflatten_pages: std::collections::HashSet<u32> =
-                if flattened_form_widgets && !self.config.render_form_fields {
-                    flattened_page_numbers.iter().copied().collect()
-                } else {
-                    std::collections::HashSet::new()
-                };
-            let ocr_input = repaired_input.as_ref().unwrap_or(validated_input);
-            let mut round_start = 0usize;
-            while round_start < pages.len() {
-                let (rendered, next_start) = {
-                    let lib = Library::init();
-                    let document = extract::load_document_from_input(&lib, ocr_input, password)?;
-                    ocr_merge::render_pages_for_ocr(
-                        &document,
-                        &pages,
-                        round_start,
-                        round_rasters,
-                        self.config.dpi,
-                        ocr_grayscale,
-                        self.config.render_form_fields,
-                        self.config.continue_on_page_error,
-                        &reflatten_pages,
-                    )?
-                    // `lib` drops here, releasing the PDFium lock before the
-                    // engine's async recognition below.
-                };
-                round_start = next_start;
-                if rendered.is_empty() {
-                    // The scan reached the end without finding another page
-                    // that needs OCR.
-                    continue;
-                }
-                // `RenderedPage::idx` is absolute, so the whole slice is
-                // passed regardless of where this round started.
-                ocr_merge::ocr_and_merge_rendered(
-                    &mut pages,
-                    rendered,
-                    engine.clone(),
-                    &self.config.ocr_language,
-                    self.config.num_workers,
-                    self.config.ocr_failure_fatal,
-                )
-                .await?;
-            }
-        }
+            ..
+        } = state;
         let t_ocr = web_time::Instant::now();
         log(&format!(
             "[liteparse] ocr: {:.1}ms",

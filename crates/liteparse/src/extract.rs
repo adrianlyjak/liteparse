@@ -15,13 +15,12 @@ use pdfium::{
 
 /// Open a PDF from path or bytes with an optional password.
 ///
-/// The returned [`Document`] borrows from the provided [`Library`], which
-/// holds the process-global PDFium lock. The lock is released when the
-/// `Library` is dropped, so callers must keep `lib` alive for as long as any
-/// `Document` / `Page` / `TextPage` etc. derived from it is in use.
+/// The returned [`Document`] borrows from the provided [`Library`] and input.
+/// The library holds the process-global PDFium lock, while byte inputs must
+/// remain alive because PDFium reads from them lazily.
 pub(crate) fn load_document_from_input<'lib>(
     lib: &'lib Library,
-    input: &PdfInput,
+    input: &'lib PdfInput,
     password: Option<&str>,
 ) -> Result<Document<'lib>, LiteParseError> {
     match input {
