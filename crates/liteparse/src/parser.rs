@@ -1524,7 +1524,7 @@ impl OpenDocument {
                 "page selection cannot be empty".to_string(),
             ));
         }
-        for &page_number in &page_numbers {
+        for &page_number in page_numbers {
             if page_number == 0 || page_number > self.page_count {
                 return Err(LiteParseError::Other(format!(
                     "page {page_number} out of range (document has {} pages)",
