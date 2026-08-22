@@ -2,6 +2,8 @@ use crate::error::PdfiumError;
 use crate::ffi;
 use crate::library::Library;
 use crate::page::Page;
+use std::cell::Cell;
+use std::marker::PhantomData;
 
 /// An open PDF document.
 ///
@@ -12,8 +14,33 @@ use crate::page::Page;
 /// lazily.
 pub struct Document<'lib> {
     pub(crate) handle: pdfium_sys::FPDF_DOCUMENT,
+    pub(crate) owns_handle: bool,
     pub(crate) _lib: std::marker::PhantomData<&'lib Library>,
 }
+
+/// A detached PDFium document handle with no callable PDFium operations.
+///
+/// Reborrow or close it through [`Library`] so every use remains inside the
+/// process-global PDFium critical section.
+///
+/// ```compile_fail
+/// use liteparse_pdfium::RetainedDocument;
+/// fn require_sync<T: Sync>() {}
+/// require_sync::<RetainedDocument>();
+/// ```
+#[must_use = "a retained PDFium document must be closed through Library"]
+pub struct RetainedDocument {
+    pub(crate) handle: pdfium_sys::FPDF_DOCUMENT,
+    _not_sync: PhantomData<Cell<()>>,
+}
+
+// SAFETY: PDFium's `public/fpdfview.h` says applications must not call PDFium
+// APIs simultaneously; it does not bind a handle to the thread that opened it.
+// This token has no PDFium operations, is deliberately !Sync, and can only be
+// reborrowed or closed through `Library`, which holds LiteParse's process-global
+// mutex.
+#[cfg(not(target_arch = "wasm32"))]
+unsafe impl Send for RetainedDocument {}
 
 /// PDFium's form-fill environment for an open document. The callback table
 /// must remain alive until the handle is closed, even though LiteParse leaves
@@ -99,6 +126,27 @@ impl SignatureApi {
 }
 
 impl<'lib> Document<'lib> {
+    /// Detach the handle from this locked transaction.
+    ///
+    /// # Safety
+    ///
+    /// Only an owning document returned by a `Library::load_document*` method
+    /// may be detached. Attempting to detach a non-owning reborrow returns
+    /// [`PdfiumError::OperationFailed`].
+    ///
+    /// The document's path or byte source must remain valid until the returned
+    /// handle is closed through [`Library::close_retained_document`].
+    pub unsafe fn detach(mut self) -> Result<RetainedDocument, PdfiumError> {
+        if !self.owns_handle {
+            return Err(PdfiumError::OperationFailed);
+        }
+        self.owns_handle = false;
+        Ok(RetainedDocument {
+            handle: self.handle,
+            _not_sync: PhantomData,
+        })
+    }
+
     pub fn page_count(&self) -> i32 {
         unsafe { ffi!(FPDF_GetPageCount(self.handle)) }
     }
@@ -108,9 +156,11 @@ impl<'lib> Document<'lib> {
     }
 
     /// Initialize read-only AcroForm access. Returns `None` for documents with
-    /// no form catalog or when PDFium rejects the form-fill environment.
+    /// no form catalog, for retained-document reborrows, or when PDFium rejects
+    /// the form-fill environment. Form actions can mutate document state, so
+    /// retained canonical documents must use a fresh owning document instead.
     pub fn form_environment(&self) -> Option<FormEnvironment<'_, 'lib>> {
-        if self.form_type() == 0 {
+        if !self.owns_handle || self.form_type() == 0 {
             return None;
         }
         let mut callbacks = Box::new(pdfium_sys::FPDF_FORMFILLINFO::default());
@@ -149,6 +199,9 @@ impl<'lib> Document<'lib> {
     /// Returns `Ok(None)` when nothing was flattened — the caller should keep
     /// using its existing page.
     pub fn flatten_form_widgets(&self, index: i32) -> Result<Option<Page<'_, 'lib>>, PdfiumError> {
+        if !self.owns_handle {
+            return Err(PdfiumError::OperationFailed);
+        }
         {
             let page = self.page(index)?;
             if !page.flatten_form_widgets_for_display() {
@@ -479,6 +532,8 @@ fn resolve_dest(
 
 impl Drop for Document<'_> {
     fn drop(&mut self) {
-        unsafe { ffi!(FPDF_CloseDocument(self.handle)) };
+        if self.owns_handle {
+            unsafe { ffi!(FPDF_CloseDocument(self.handle)) };
+        }
     }
 }

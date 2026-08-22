@@ -9,7 +9,9 @@ mod text_page;
 mod types;
 
 pub use bitmap::Bitmap;
-pub use document::{Document, FormEnvironment, OutlineEntry, SignatureSummary, XfaPacket};
+pub use document::{
+    Document, FormEnvironment, OutlineEntry, RetainedDocument, SignatureSummary, XfaPacket,
+};
 pub use error::PdfiumError;
 pub use font::{Font, FontType};
 pub use library::Library;
