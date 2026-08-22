@@ -220,6 +220,13 @@ struct ExtractionState {
     repaired_input: Option<PdfInput>,
 }
 
+struct ExtractionRequest<'a> {
+    target_pages: Option<&'a [u32]>,
+    max_pages: usize,
+    outline: Option<Vec<OutlineTarget>>,
+    started_at: web_time::Instant,
+}
+
 struct PdfTransaction<'a> {
     library: &'a Library,
     resolved: &'a ResolvedInput,
@@ -250,14 +257,10 @@ impl DocumentAccess for ReopeningDocumentAccess<'_> {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn extract_transaction(
     parser: &LiteParse,
     transaction: PdfTransaction<'_>,
-    target_pages: Option<&[u32]>,
-    max_pages: usize,
-    outline: Option<Vec<OutlineTarget>>,
-    started_at: web_time::Instant,
+    request: ExtractionRequest<'_>,
 ) -> Result<ExtractionState, LiteParseError> {
     let password = parser.config.password.as_deref();
     let validated_input = &transaction.resolved.input;
@@ -289,33 +292,27 @@ fn extract_transaction(
 
         extract_loaded_document(
             parser,
-            transaction.library,
+            &transaction,
             &document,
             source_document.as_ref().unwrap_or(&document),
-            validated_input,
             document_input,
-            transaction.resolved.is_converted(),
-            target_pages,
-            max_pages,
-            outline,
-            started_at,
+            request,
         )?
     };
     state.repaired_input = repaired_input;
     Ok(state)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn render_ocr_transaction(
     parser: &LiteParse,
     transaction: PdfTransaction<'_>,
-    repaired_input: Option<&PdfInput>,
-    pages: &[Page],
+    state: &ExtractionState,
     round_start: usize,
     round_rasters: usize,
     grayscale: bool,
     reflatten_pages: &std::collections::HashSet<u32>,
 ) -> Result<(Vec<ocr_merge::RenderedPage>, usize), LiteParseError> {
+    let repaired_input = state.repaired_input.as_ref();
     let input = repaired_input.unwrap_or(&transaction.resolved.input);
     let document = extract::load_document_from_input(
         transaction.library,
@@ -324,7 +321,7 @@ fn render_ocr_transaction(
     )?;
     let (rendered, next_start) = ocr_merge::render_pages_for_ocr(
         &document,
-        pages,
+        &state.pages,
         round_start,
         round_rasters,
         parser.config.dpi,
@@ -336,20 +333,23 @@ fn render_ocr_transaction(
     Ok((rendered, next_start))
 }
 
-#[allow(clippy::too_many_arguments)]
 fn extract_loaded_document(
     parser: &LiteParse,
-    lib: &Library,
+    transaction: &PdfTransaction<'_>,
     document: &pdfium::Document<'_>,
     source_document: &pdfium::Document<'_>,
-    validated_input: &PdfInput,
     document_input: &PdfInput,
-    is_converted: bool,
-    target_pages: Option<&[u32]>,
-    max_pages: usize,
-    outline: Option<Vec<OutlineTarget>>,
-    started_at: web_time::Instant,
+    request: ExtractionRequest<'_>,
 ) -> Result<ExtractionState, LiteParseError> {
+    let ExtractionRequest {
+        target_pages,
+        max_pages,
+        outline,
+        started_at,
+    } = request;
+    let lib = transaction.library;
+    let validated_input = &transaction.resolved.input;
+    let is_converted = transaction.resolved.is_converted();
     let total_pages = document.page_count().max(0) as u32;
     let form_type = parser
         .config
@@ -878,7 +878,16 @@ impl LiteParse {
         };
         let ocr_grayscale = ocr_engine.as_ref().is_some_and(|e| e.prefers_grayscale());
         let mut state = access.transact(|transaction| {
-            extract_transaction(self, transaction, target_pages, max_pages, outline, t0)
+            extract_transaction(
+                self,
+                transaction,
+                ExtractionRequest {
+                    target_pages,
+                    max_pages,
+                    outline,
+                    started_at: t0,
+                },
+            )
         })?;
         let t1 = web_time::Instant::now();
 
@@ -895,15 +904,13 @@ impl LiteParse {
                 } else {
                     std::collections::HashSet::new()
                 };
-            let repaired_input = state.repaired_input.as_ref();
             let mut round_start = 0usize;
             while round_start < state.pages.len() {
                 let (rendered, next_start) = access.transact(|transaction| {
                     render_ocr_transaction(
                         self,
                         transaction,
-                        repaired_input,
-                        &state.pages,
+                        &state,
                         round_start,
                         round_rasters,
                         ocr_grayscale,
