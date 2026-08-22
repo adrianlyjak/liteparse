@@ -36,6 +36,12 @@ try {
     document.parsePages([2 ** 32 + 1]),
     /page number must be a finite integer/,
   );
+  const screenshots = await document.screenshotPages([3, 1, 3]);
+  assert.deepEqual(
+    screenshots.map((page) => page.pageNum),
+    [3, 1, 3],
+  );
+  assert.ok(screenshots.every((page) => page.imageBuffer.length > 8));
 } finally {
   await document.close();
 }
@@ -64,6 +70,7 @@ assert.deepEqual(
 
 await assert.rejects(document.parsePages([1]), /document is closed/);
 await assert.rejects(document.reopen(), /document is closed/);
+await assert.rejects(document.screenshotPages([1]), /document is closed/);
 
 const converted = await parser.openDocument(receipt);
 try {

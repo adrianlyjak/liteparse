@@ -619,6 +619,8 @@ export declare class OpenDocument {
   parse(): Promise<JsParseResult>
   /** Parse an explicit set of 1-based source pages. */
   parsePages(pageNumbers: Array<number>): Promise<JsParseResult>
+  /** Render explicit 1-based source pages as PNG screenshots. */
+  screenshotPages(pageNumbers: Array<number>): Promise<Array<JsScreenshotResult>>
   /** Reopen the PDFium document while retaining the normalized PDF. */
   reopen(): Promise<void>
   /** Release the retained document. Idempotent. */

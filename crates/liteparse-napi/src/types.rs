@@ -1184,6 +1184,30 @@ impl JsScreenshotResult {
     }
 }
 
+impl From<liteparse::parser::ScreenshotResult> for JsScreenshotResult {
+    fn from(result: liteparse::parser::ScreenshotResult) -> Self {
+        Self {
+            page_num: result.page_num,
+            width: result.width,
+            height: result.height,
+            image_buffer: result.image_bytes.into(),
+            is_solid_fill: result.is_solid_fill,
+            rects: result
+                .rects
+                .into_iter()
+                .map(|rect| JsScreenshotRect {
+                    x: rect.x as f64,
+                    y: rect.y as f64,
+                    width: rect.width as f64,
+                    height: rect.height as f64,
+                    color: rect.color,
+                    is_line: rect.is_line,
+                })
+                .collect(),
+        }
+    }
+}
+
 #[napi(object)]
 #[derive(Clone)]
 pub struct JsLayoutComplexityStats {

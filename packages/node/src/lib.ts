@@ -526,6 +526,14 @@ export class OpenDocument implements DocumentOperations<[]> {
     return toParseResult(await this._native.parsePages(Array.from(pageNumbers)));
   }
 
+  /** Render explicit 1-based source pages as PNG screenshots. */
+  async screenshotPages(
+    pageNumbers: readonly number[],
+  ): Promise<ScreenshotResult[]> {
+    const results = await this._native.screenshotPages(Array.from(pageNumbers));
+    return results.map(toScreenshot);
+  }
+
   /** Release PDFium caches and reopen the normalized PDF. */
   async reopen(): Promise<void> {
     await this._native.reopen();

@@ -75,6 +75,19 @@ pub struct ScreenshotResult {
     pub rects: Vec<ScreenshotRect>,
 }
 
+impl From<render::RenderedPage> for ScreenshotResult {
+    fn from(page: render::RenderedPage) -> Self {
+        Self {
+            page_num: page.page_num,
+            width: page.width,
+            height: page.height,
+            image_bytes: page.png_bytes,
+            is_solid_fill: page.is_solid_fill,
+            rects: page.rects,
+        }
+    }
+}
+
 /// Env var pointing at a fragmented glyph-outline → unicode font database
 /// directory (`%02x%02x.msgpack` shards). When set, [`LiteParse::new`]
 /// auto-wires a [`crate::FontDbResolver`] so buggy/obfuscated-font glyphs are
@@ -491,6 +504,57 @@ fn render_ocr_transaction(
     Ok((rendered, next_start))
 }
 
+fn with_render_document<T, F>(
+    parser: &LiteParse,
+    transaction: PdfTransaction<'_>,
+    render_form_fields: bool,
+    operation: F,
+) -> Result<T, LiteParseError>
+where
+    F: FnOnce(&pdfium::Document) -> Result<T, LiteParseError>,
+{
+    // A form environment can mutate document state. Use a scratch document
+    // whenever form appearances are requested so the retained canonical
+    // document remains safe for later operations.
+    let scratch = (render_form_fields || transaction.canonical.is_none())
+        .then(|| {
+            extract::load_document_from_input(
+                transaction.library,
+                &transaction.resolved.input,
+                parser.config.password.as_deref(),
+            )
+        })
+        .transpose()?;
+    let document = scratch
+        .as_ref()
+        .or(transaction.canonical.as_ref())
+        .expect("a PDF transaction must provide or open a document");
+    operation(document)
+}
+
+fn screenshot_transaction(
+    parser: &LiteParse,
+    transaction: PdfTransaction<'_>,
+    page_numbers: &[u32],
+) -> Result<Vec<ScreenshotResult>, LiteParseError> {
+    with_render_document(
+        parser,
+        transaction,
+        parser.config.render_form_fields,
+        |document| {
+            render::render_document_pages(
+                document,
+                Some(page_numbers),
+                parser.config.dpi,
+                parser.config.detect_screenshot_rects,
+                parser.config.render_form_fields,
+                false,
+            )
+            .map(|pages| pages.into_iter().map(ScreenshotResult::from).collect())
+        },
+    )
+}
+
 fn extract_loaded_document(
     parser: &LiteParse,
     transaction: &PdfTransaction<'_>,
@@ -624,14 +688,7 @@ fn extract_loaded_document(
             parser.config.continue_on_page_error,
         )?
         .into_iter()
-        .map(|page| ScreenshotResult {
-            page_num: page.page_num,
-            width: page.width,
-            height: page.height,
-            image_bytes: page.png_bytes,
-            is_solid_fill: page.is_solid_fill,
-            rects: page.rects,
-        })
+        .map(ScreenshotResult::from)
         .collect()
     } else {
         Vec::new()
@@ -1360,17 +1417,7 @@ impl LiteParse {
             self.config.render_form_fields,
         )?;
 
-        Ok(rendered
-            .into_iter()
-            .map(|page| ScreenshotResult {
-                page_num: page.page_num,
-                width: page.width,
-                height: page.height,
-                image_bytes: page.png_bytes,
-                is_solid_fill: page.is_solid_fill,
-                rects: page.rects,
-            })
-            .collect())
+        Ok(rendered.into_iter().map(ScreenshotResult::from).collect())
     }
 
     pub fn config(&self) -> &LiteParseConfig {
@@ -1467,6 +1514,27 @@ impl OpenDocument {
         Ok(())
     }
 
+    fn validate_page_selection(&self, page_numbers: &[u32]) -> Result<(), LiteParseError> {
+        // Preserve the retained-handle contract: once closed, every operation
+        // reports that state before validating its own arguments.
+        self.ensure_open()?;
+
+        if page_numbers.is_empty() {
+            return Err(LiteParseError::Other(
+                "page selection cannot be empty".to_string(),
+            ));
+        }
+        for &page_number in &page_numbers {
+            if page_number == 0 || page_number > self.page_count {
+                return Err(LiteParseError::Other(format!(
+                    "page {page_number} out of range (document has {} pages)",
+                    self.page_count
+                )));
+            }
+        }
+        Ok(())
+    }
+
     async fn parse_selected(
         &self,
         target_pages: Option<&[u32]>,
@@ -1509,6 +1577,22 @@ impl OpenDocument {
         let page_numbers =
             normalize_page_numbers(page_numbers, self.page_count, self.parser.config.max_pages)?;
         self.parse_selected(Some(&page_numbers)).await
+    }
+
+    /// Render explicit 1-based source pages as PNG screenshots.
+    ///
+    /// The selection must be nonempty and entirely within the document.
+    /// Caller order and duplicate page numbers are preserved.
+    pub fn screenshot_pages<P>(
+        &self,
+        page_numbers: P,
+    ) -> Result<Vec<ScreenshotResult>, LiteParseError>
+    where
+        P: AsRef<[u32]>,
+    {
+        let page_numbers = page_numbers.as_ref();
+        self.validate_page_selection(page_numbers)?;
+        self.transact(|transaction| screenshot_transaction(&self.parser, transaction, page_numbers))
     }
 
     /// Reopen the PDFium document while retaining the normalized PDF.

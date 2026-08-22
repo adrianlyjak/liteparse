@@ -157,12 +157,19 @@ non-PDF inputs are converted to a temporary PDF once:
 
 ```typescript
 import { LiteParse } from '@llamaindex/liteparse';
+import { writeFile } from 'node:fs/promises';
 
 const parser = new LiteParse({ ocrEnabled: false });
 const document = await parser.openDocument('document.pdf');
 try {
   console.log(document.pageCount);
   const result = await document.parsePages([1, 2]);
+  const screenshots = await document.screenshotPages([1, 2]);
+  await Promise.all(
+    screenshots.map((page) =>
+      writeFile(`page_${page.pageNum}.png`, page.imageBuffer),
+    ),
+  );
 } finally {
   await document.close();
 }

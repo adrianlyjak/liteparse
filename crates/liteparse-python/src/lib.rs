@@ -1376,6 +1376,26 @@ impl PyOpenDocument {
         Ok(PyParseResult::from_rust(result, self.extract_text_metadata))
     }
 
+    fn screenshot_pages(
+        &self,
+        py: Python<'_>,
+        page_numbers: Vec<u32>,
+    ) -> PyResult<Vec<PyScreenshotResult>> {
+        py.detach(|| {
+            self.inner
+                .screenshot_pages(page_numbers)
+                .map(|results| {
+                    results
+                        .into_iter()
+                        .map(PyScreenshotResult::from_rust)
+                        .collect()
+                })
+                .map_err(|error| {
+                    PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(error.to_string())
+                })
+        })
+    }
+
     fn close(&self, py: Python<'_>) {
         py.detach(|| self.inner.close());
     }

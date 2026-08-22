@@ -126,6 +126,9 @@ parser = LiteParse(ocr_enabled=False)
 with parser.open_document("document.pdf") as document:
     print(document.page_count)
     result = document.parse_pages([1, 2])
+    for screenshot in document.screenshot_pages([1, 2]):
+        with open(f"page_{screenshot.page_num}.png", "wb") as output:
+            output.write(screenshot.image_bytes)
 ```
 
 Call `document.reopen()` between large page groups to release PDFium's

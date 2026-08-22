@@ -119,3 +119,48 @@ def test_parse_pages_reports_closed_before_selection_errors(
 
     with pytest.raises(ParseError, match="document is closed"):
         document.parse_pages(pages)
+
+
+def test_screenshot_pages_matches_one_shot_and_preserves_order(
+    page_parser: LiteParse, three_page_pdf: Path
+) -> None:
+    expected = page_parser.screenshot(
+        three_page_pdf, page_numbers=[3, 1, 3]
+    )
+
+    with page_parser.open_document(three_page_pdf) as document:
+        actual = document.screenshot_pages([3, 1, 3])
+
+    assert [page.page_num for page in actual] == [3, 1, 3]
+    assert [page.image_bytes for page in actual] == [
+        page.image_bytes for page in expected
+    ]
+
+
+@pytest.mark.parametrize(
+    ("pages", "message"),
+    [
+        ([], "page selection cannot be empty"),
+        ([0], r"page 0 out of range \(document has 3 pages\)"),
+        ([1, 4], r"page 4 out of range \(document has 3 pages\)"),
+    ],
+)
+def test_screenshot_pages_validates_selection(
+    page_parser: LiteParse,
+    three_page_pdf: Path,
+    pages: list[int],
+    message: str,
+) -> None:
+    with page_parser.open_document(three_page_pdf) as document:
+        with pytest.raises(ParseError, match=message):
+            document.screenshot_pages(pages)
+
+
+def test_screenshot_pages_rejects_closed_document(
+    page_parser: LiteParse, three_page_pdf: Path
+) -> None:
+    document = page_parser.open_document(three_page_pdf)
+    document.close()
+
+    with pytest.raises(ParseError, match="document is closed"):
+        document.screenshot_pages([1])

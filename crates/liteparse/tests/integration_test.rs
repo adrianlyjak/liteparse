@@ -989,6 +989,93 @@ mod open_document {
 
     #[tokio::test]
     #[serial]
+    async fn screenshot_pages_matches_one_shot_and_preserves_selection_order() {
+        let parser = LiteParse::new(LiteParseConfig {
+            ocr_enabled: false,
+            quiet: true,
+            detect_screenshot_rects: true,
+            ..Default::default()
+        });
+        let selection = vec![3, 1, 3];
+        let expected = parser
+            .screenshot(ACROFORM_PDF, Some(selection.clone()))
+            .await
+            .unwrap();
+        let document = parser
+            .open_document(PdfInput::Path(ACROFORM_PDF.into()))
+            .await
+            .unwrap();
+
+        let actual = document.screenshot_pages(selection).unwrap();
+
+        assert_eq!(
+            actual.iter().map(|page| page.page_num).collect::<Vec<_>>(),
+            vec![3, 1, 3]
+        );
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.iter().zip(expected) {
+            assert_eq!(actual.width, expected.width);
+            assert_eq!(actual.height, expected.height);
+            assert_eq!(actual.image_bytes, expected.image_bytes);
+            assert_eq!(actual.is_solid_fill, expected.is_solid_fill);
+            assert_eq!(
+                serde_json::to_value(&actual.rects).unwrap(),
+                serde_json::to_value(&expected.rects).unwrap()
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn screenshot_pages_validates_selection_and_closed_state() {
+        let document = parser()
+            .open_document(PdfInput::Path(ACROFORM_PDF.into()))
+            .await
+            .unwrap();
+
+        for (pages, expected) in [
+            (vec![], "page selection cannot be empty"),
+            (vec![0], "page 0 out of range (document has 3 pages)"),
+            (vec![1, 4], "page 4 out of range (document has 3 pages)"),
+        ] {
+            assert_eq!(
+                document.screenshot_pages(pages).unwrap_err().to_string(),
+                expected
+            );
+        }
+
+        document.close();
+        for pages in [vec![], vec![0], vec![4]] {
+            assert_eq!(
+                document.screenshot_pages(pages).unwrap_err().to_string(),
+                "document is closed"
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn form_screenshots_remain_stable_across_parse_calls() {
+        let parser = LiteParse::new(LiteParseConfig {
+            ocr_enabled: false,
+            quiet: true,
+            render_form_fields: true,
+            ..Default::default()
+        });
+        let document = parser
+            .open_document(PdfInput::Path(ACROFORM_PDF.into()))
+            .await
+            .unwrap();
+
+        let before = document.screenshot_pages([1]).unwrap();
+        document.parse_pages([1]).await.unwrap();
+        let after = document.screenshot_pages([1]).unwrap();
+
+        assert_eq!(before[0].image_bytes, after[0].image_bytes);
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn open_document_converts_supported_inputs() {
         let document = parser()
             .open_document(PdfInput::Path(

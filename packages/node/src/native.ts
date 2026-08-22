@@ -315,6 +315,7 @@ export interface NativeDocumentOperations {
 
 export interface NativeOpenDocument extends NativeDocumentOperations {
   readonly pageCount: number;
+  screenshotPages(pageNumbers: number[]): Promise<NativeScreenshotResult[]>;
   reopen(): Promise<void>;
   close(): Promise<void>;
 }
