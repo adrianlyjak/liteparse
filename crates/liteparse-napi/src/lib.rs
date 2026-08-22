@@ -4,8 +4,8 @@ use napi_derive::napi;
 mod types;
 
 use types::{
-    JsLiteParseConfig, JsPageComplexityStats, JsPageInput, JsParseBatch, JsParseResult,
-    JsScreenshotResult, JsTextItem,
+    JsLiteParseConfig, JsPageComplexityStats, JsPageInput, JsPageRaster, JsPageRasterOptions,
+    JsParseBatch, JsParseResult, JsScreenshotResult, JsTextItem,
 };
 
 /// Main LiteParse parser class.
@@ -46,6 +46,20 @@ impl LiteParse {
             .map_err(|e| Error::from_reason(e.to_string()))?;
 
         Ok(JsParseResult::from_rust(&result, &self.config))
+    }
+
+    /// Open a PDF once for repeated parsing and page rastering.
+    #[napi(ts_return_type = "Promise<OpenDocument>")]
+    pub fn open_document(&self, input: Either<String, Buffer>) -> AsyncTask<OpenDocumentTask> {
+        let input = match input {
+            Either::A(path) => liteparse::types::PdfInput::Path(path),
+            Either::B(buf) => liteparse::types::PdfInput::Bytes(buf.to_vec()),
+        };
+        AsyncTask::new(OpenDocumentTask {
+            parser: self.inner.clone(),
+            input: Some(input),
+            config: self.config.clone(),
+        })
     }
 
     /// Open a document for bounded-memory batch parsing. Internal plumbing
@@ -168,6 +182,121 @@ impl LiteParse {
     #[napi(getter)]
     pub fn config(&self) -> JsLiteParseConfig {
         JsLiteParseConfig::from_rust(&self.config)
+    }
+}
+
+pub struct OpenDocumentTask {
+    parser: liteparse::LiteParse,
+    input: Option<liteparse::types::PdfInput>,
+    config: liteparse::config::LiteParseConfig,
+}
+
+#[napi]
+impl Task for OpenDocumentTask {
+    type Output = liteparse::OpenDocument;
+    type JsValue = OpenDocument;
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        self.parser
+            .open_document(self.input.take().expect("open task runs once"))
+            .map_err(|error| Error::from_reason(error.to_string()))
+    }
+
+    fn resolve(&mut self, _env: Env, document: Self::Output) -> Result<Self::JsValue> {
+        Ok(OpenDocument {
+            inner: std::sync::Arc::new(document),
+            config: self.config.clone(),
+        })
+    }
+}
+
+/// A PDF kept open for repeated parsing and raw page rastering.
+#[napi]
+pub struct OpenDocument {
+    inner: std::sync::Arc<liteparse::OpenDocument>,
+    config: liteparse::config::LiteParseConfig,
+}
+
+#[napi]
+impl OpenDocument {
+    /// Total pages in the source PDF.
+    #[napi(getter)]
+    pub fn page_count(&self) -> u32 {
+        self.inner.page_count()
+    }
+
+    /// Parse the retained PDF.
+    #[napi]
+    pub async fn parse(&self) -> Result<JsParseResult> {
+        let result = self
+            .inner
+            .parse()
+            .await
+            .map_err(|error| Error::from_reason(error.to_string()))?;
+        Ok(JsParseResult::from_rust(&result, &self.config))
+    }
+
+    /// Render one 1-based page to an owned, unencoded pixel buffer.
+    #[napi(ts_return_type = "Promise<JsPageRaster>")]
+    pub fn raster_page(
+        &self,
+        page_num: u32,
+        options: Option<JsPageRasterOptions>,
+    ) -> AsyncTask<RasterPageTask> {
+        AsyncTask::new(RasterPageTask {
+            document: self.inner.clone(),
+            page_num,
+            options: options.unwrap_or_default(),
+        })
+    }
+
+    /// Release the retained PDF. Idempotent.
+    #[napi(ts_return_type = "Promise<void>")]
+    pub fn close(&self) -> AsyncTask<CloseDocumentTask> {
+        AsyncTask::new(CloseDocumentTask {
+            document: self.inner.clone(),
+        })
+    }
+}
+
+pub struct RasterPageTask {
+    document: std::sync::Arc<liteparse::OpenDocument>,
+    page_num: u32,
+    options: JsPageRasterOptions,
+}
+
+#[napi]
+impl Task for RasterPageTask {
+    type Output = liteparse::PageRaster;
+    type JsValue = JsPageRaster;
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        self.document
+            .raster_page(self.page_num, self.options.clone().into_rust())
+            .map_err(|error| Error::from_reason(error.to_string()))
+    }
+
+    fn resolve(&mut self, _env: Env, raster: Self::Output) -> Result<Self::JsValue> {
+        Ok(JsPageRaster::from_rust(raster))
+    }
+}
+
+pub struct CloseDocumentTask {
+    document: std::sync::Arc<liteparse::OpenDocument>,
+}
+
+#[napi]
+impl Task for CloseDocumentTask {
+    type Output = ();
+    type JsValue = ();
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        self.document.close();
+        Ok(())
+    }
+
+    fn resolve(&mut self, _env: Env, (): Self::Output) -> Result<Self::JsValue> {
+        Ok(())
     }
 }
 

@@ -150,6 +150,46 @@ const result = await parser.parse(pdfBytes);
 console.log(result.text);
 ```
 
+## Open PDFs and raw page rasters
+
+Keep a PDF open when parsing or rendering several pages. `rasterPage()` runs
+off the JavaScript thread and returns tightly packed `rgb8` or `rgbx8` pixels.
+This example bounds memory to four active pages and writes JPEGs directly to
+disk with Sharp:
+
+```typescript
+import sharp from "sharp";
+import { mkdir } from "node:fs/promises";
+import { LiteParse } from "@llamaindex/liteparse";
+
+const parser = new LiteParse({ ocrEnabled: false });
+const document = await parser.openDocument("document.pdf");
+await mkdir("pages", { recursive: true });
+
+try {
+  const workerCount = 4;
+  await Promise.all(
+    Array.from({ length: workerCount }, async (_, worker) => {
+      for (let pageNum = worker + 1; pageNum <= document.pageCount; pageNum += workerCount) {
+        const raster = await document.rasterPage(pageNum, {
+          dpi: 150,
+          pixelFormat: "rgb8",
+        });
+        // rasterPage has released PDFium's lock before Sharp starts encoding.
+        // The raw buffer goes straight to JPEG, with no PNG intermediary.
+        await sharp(raster.pixels, {
+          raw: { width: raster.width, height: raster.height, channels: 3 },
+        })
+          .jpeg({ quality: 85 })
+          .toFile(`pages/${pageNum}.jpg`);
+      }
+    }),
+  );
+} finally {
+  await document.close();
+}
+```
+
 ## Screenshots
 
 Generate PNG screenshots of document pages:
