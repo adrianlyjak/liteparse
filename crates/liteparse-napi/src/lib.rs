@@ -270,7 +270,7 @@ impl OpenDocument {
 
     /// Render explicit 1-based source pages as PNG screenshots.
     #[napi(ts_return_type = "Promise<Array<JsScreenshotResult>>")]
-    pub fn screenshot_pages(&self, page_numbers: Vec<u32>) -> AsyncTask<ScreenshotPagesTask> {
+    pub fn screenshot_pages(&self, page_numbers: Vec<f64>) -> AsyncTask<ScreenshotPagesTask> {
         AsyncTask::new(ScreenshotPagesTask {
             document: self.inner.clone(),
             page_numbers,
@@ -298,7 +298,7 @@ impl OpenDocument {
 
 pub struct ScreenshotPagesTask {
     document: std::sync::Arc<liteparse::OpenDocument>,
-    page_numbers: Vec<u32>,
+    page_numbers: Vec<f64>,
 }
 
 #[napi]
@@ -307,8 +307,9 @@ impl Task for ScreenshotPagesTask {
     type JsValue = Vec<JsScreenshotResult>;
 
     fn compute(&mut self) -> Result<Self::Output> {
+        let page_numbers = page_numbers_from_js(std::mem::take(&mut self.page_numbers))?;
         self.document
-            .screenshot_pages(std::mem::take(&mut self.page_numbers))
+            .screenshot_pages(page_numbers)
             .map_err(|error| Error::from_reason(error.to_string()))
     }
 
