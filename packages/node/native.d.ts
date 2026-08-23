@@ -608,6 +608,8 @@ export declare class LiteParse {
    * LibreOffice/ImageMagick are available.
    */
   screenshot(input: string | Buffer, pageNumbers?: Array<number> | undefined | null): Promise<Array<JsScreenshotResult>>
+  /** Render explicit 1-based source pages as PNG screenshots. */
+  screenshotPages(input: string | Buffer, pageNumbers: Array<number>): Promise<Array<JsScreenshotResult>>
   /** Get the current configuration. */
   get config(): JsLiteParseConfig
 }

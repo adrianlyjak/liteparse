@@ -12,6 +12,16 @@ fn parser() -> LiteParse {
     })
 }
 
+fn screenshot_parser() -> LiteParse {
+    LiteParse::new(LiteParseConfig {
+        ocr_enabled: false,
+        quiet: true,
+        dpi: 96.0,
+        render_form_fields: true,
+        ..Default::default()
+    })
+}
+
 fn assert_document_operations<T, Input>()
 where
     T: DocumentOperations<Input = Input>,
@@ -66,6 +76,90 @@ async fn trait_calls_preserve_natural_source_arity() {
 
     assert_eq!(one_shot.text, retained.text);
     assert_eq!(one_shot.pages[0].page_number, 2);
+
+    let one_shot = DocumentOperations::screenshot_pages(
+        &parser,
+        PdfInput::Path(ACROFORM_PDF.into()),
+        [3, 1, 3],
+    )
+    .await
+    .unwrap();
+    let retained = DocumentOperations::screenshot_pages(&document, (), [3, 1, 3])
+        .await
+        .unwrap();
+
+    assert_eq!(
+        one_shot
+            .iter()
+            .map(|page| page.page_num)
+            .collect::<Vec<_>>(),
+        vec![3, 1, 3]
+    );
+    assert_eq!(
+        one_shot
+            .iter()
+            .map(|page| page.image_bytes.as_slice())
+            .collect::<Vec<_>>(),
+        retained
+            .iter()
+            .map(|page| page.image_bytes.as_slice())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn screenshot_pages_matches_between_one_shot_and_retained_documents() {
+    let parser = screenshot_parser();
+    let input = PdfInput::Path(ACROFORM_PDF.into());
+    let selection = [3, 1, 3];
+
+    let one_shot = parser
+        .screenshot_pages(input.clone(), selection)
+        .await
+        .unwrap();
+    let document = parser.open_document(input).await.unwrap();
+    let retained = document.screenshot_pages(selection).unwrap();
+
+    assert_eq!(
+        one_shot
+            .iter()
+            .map(|page| page.page_num)
+            .collect::<Vec<_>>(),
+        vec![3, 1, 3]
+    );
+    assert_eq!(one_shot.len(), retained.len());
+    for (one_shot, retained) in one_shot.iter().zip(&retained) {
+        assert_eq!(one_shot.page_num, retained.page_num);
+        assert_eq!(one_shot.width, retained.width);
+        assert_eq!(one_shot.height, retained.height);
+        assert_eq!(one_shot.image_bytes, retained.image_bytes);
+    }
+}
+
+#[tokio::test]
+#[serial]
+async fn screenshot_page_validation_matches_between_document_modes() {
+    let parser = screenshot_parser();
+    let input = PdfInput::Path(ACROFORM_PDF.into());
+    let document = parser.open_document(input.clone()).await.unwrap();
+
+    for (pages, expected) in [
+        (vec![], "page selection cannot be empty"),
+        (vec![0], "page 0 out of range (document has 3 pages)"),
+        (vec![1, 4], "page 4 out of range (document has 3 pages)"),
+    ] {
+        let one_shot = parser
+            .screenshot_pages(input.clone(), &pages)
+            .await
+            .expect_err("an invalid one-shot selection should fail");
+        let retained = document
+            .screenshot_pages(&pages)
+            .expect_err("an invalid retained selection should fail");
+
+        assert_eq!(one_shot.to_string(), expected);
+        assert_eq!(one_shot.to_string(), retained.to_string());
+    }
 }
 
 #[tokio::test]

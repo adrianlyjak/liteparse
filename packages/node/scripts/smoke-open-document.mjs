@@ -9,8 +9,14 @@ const fixture = fileURLToPath(
 const receipt = fileURLToPath(
   new URL("../../../integration_tests_data/receipt.png", import.meta.url),
 );
-const parser = new LiteParse({ ocrEnabled: false, quiet: true });
+const parser = new LiteParse({
+  ocrEnabled: false,
+  quiet: true,
+  dpi: 96,
+  renderFormFields: true,
+});
 const oneShot = await parser.parsePages(fixture, [3, 1, 3]);
+const oneShotScreenshots = await parser.screenshotPages(fixture, [3, 1, 3]);
 const document = await parser.openDocument(fixture);
 
 try {
@@ -42,6 +48,14 @@ try {
     [3, 1, 3],
   );
   assert.ok(screenshots.every((page) => page.imageBuffer.length > 8));
+  assert.deepEqual(
+    oneShotScreenshots.map((page) => page.pageNum),
+    [3, 1, 3],
+  );
+  assert.deepEqual(
+    oneShotScreenshots.map((page) => page.imageBuffer),
+    screenshots.map((page) => page.imageBuffer),
+  );
   await assert.rejects(
     document.screenshotPages([1.5]),
     /page number must be a finite integer/,
@@ -60,6 +74,21 @@ for (const [pages, message] of [
   [[1, 4], /page 4 out of range \(document has 3 pages\)/],
 ]) {
   await assert.rejects(parser.parsePages(fixture, pages), message);
+}
+
+for (const [pages, message] of [
+  [[], /page selection cannot be empty/],
+  [[0], /page 0 out of range \(document has 3 pages\)/],
+  [[1, 4], /page 4 out of range \(document has 3 pages\)/],
+]) {
+  await assert.rejects(parser.screenshotPages(fixture, pages), message);
+
+  const retained = await parser.openDocument(fixture);
+  try {
+    await assert.rejects(retained.screenshotPages(pages), message);
+  } finally {
+    await retained.close();
+  }
 }
 
 // Arrays select the original synchronous projection overload. Buffer and

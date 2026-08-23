@@ -440,7 +440,9 @@ def _convert_native_result(native_result: Any) -> ParseResult:
     )
 
 
-_DOCUMENT_OPERATION_NAMES = frozenset({"parse", "parse_pages"})
+_DOCUMENT_OPERATION_NAMES = frozenset(
+    {"parse", "parse_pages", "screenshot_pages"}
+)
 
 
 class OpenDocument:
@@ -928,6 +930,31 @@ class LiteParse:
             return [_convert_screenshot(result) for result in native_results]
         except Exception as e:
             raise ParseError(str(e)) from e
+
+    def screenshot_pages(
+        self,
+        file_data: Union[str, Path, bytes],
+        page_numbers: Iterable[int],
+    ) -> List[ScreenshotResult]:
+        """Render explicit 1-based source pages as PNG screenshots."""
+        try:
+            pages = list(page_numbers)
+            if isinstance(file_data, bytes):
+                native_results = self._native.screenshot_pages_bytes(
+                    file_data, pages
+                )
+            else:
+                file_path = Path(file_data)
+                if not file_path.exists():
+                    raise FileNotFoundError(f"File not found: {file_path}")
+                native_results = self._native.screenshot_pages(
+                    str(file_path.absolute()), pages
+                )
+            return [_convert_screenshot(result) for result in native_results]
+        except FileNotFoundError:
+            raise
+        except Exception as error:
+            raise ParseError(str(error)) from error
 
     def get_config(self) -> LiteParseConfig:
         """Return the resolved configuration."""

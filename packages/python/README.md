@@ -136,15 +136,18 @@ document-level caches without converting the input again.
 
 ## Screenshots
 
-Generate PNG screenshots of document pages:
+Generate PNG screenshots of selected document pages:
 
 ```python
-screenshots = parser.screenshot("document.pdf", page_numbers=[1, 2, 3])
+screenshots = parser.screenshot_pages("document.pdf", [1, 2, 3])
 for s in screenshots:
     print(f"Page {s.page_num}: {s.width}x{s.height}")
     with open(f"page_{s.page_num}.png", "wb") as f:
         f.write(s.image_bytes)
 ```
+
+The existing `screenshot(file_path, page_numbers=...)` method remains
+available and renders every page when `page_numbers` is omitted.
 
 ## Document Complexity
 
