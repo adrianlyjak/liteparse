@@ -1187,12 +1187,13 @@ mod open_document {
         worker.join().unwrap();
     }
 
-    #[test]
+    #[tokio::test]
     #[serial]
-    fn raster_is_tight_opaque_and_usable_across_threads() {
+    async fn raster_is_tight_opaque_and_usable_across_threads() {
         let document = Arc::new(
             parser()
                 .open_document(PdfInput::Path(SAMPLE_PDF.into()))
+                .await
                 .unwrap(),
         );
         let render = |format| {
@@ -1234,9 +1235,9 @@ mod open_document {
         document.close();
     }
 
-    #[test]
+    #[tokio::test]
     #[serial]
-    fn drop_closes_before_owned_bytes_are_released() {
+    async fn drop_closes_before_owned_bytes_are_released() {
         {
             let document = parser()
                 .open_document(PdfInput::Bytes(std::fs::read(SAMPLE_PDF).unwrap()))
