@@ -1506,25 +1506,8 @@ impl OpenDocument {
         // Closed state takes precedence over argument validation for every
         // operation on the retained document.
         self.ensure_open()?;
-
-        let mut page_numbers = page_numbers.as_ref().to_vec();
-        if page_numbers.is_empty() {
-            return Err(LiteParseError::Other(
-                "page selection cannot be empty".to_string(),
-            ));
-        }
-        for &page_number in &page_numbers {
-            if page_number == 0 || page_number > self.page_count {
-                return Err(LiteParseError::Other(format!(
-                    "page {page_number} out of range (document has {} pages)",
-                    self.page_count
-                )));
-            }
-        }
-
-        page_numbers.sort_unstable();
-        page_numbers.dedup();
-        page_numbers.truncate(self.parser.config.max_pages);
+        let page_numbers =
+            normalize_page_numbers(page_numbers, self.page_count, self.parser.config.max_pages)?;
         self.parse_selected(Some(&page_numbers)).await
     }
 
@@ -1560,6 +1543,25 @@ impl OpenDocument {
         if let Some(stored) = stored {
             stored.close();
         }
+    }
+}
+
+impl DocumentOperations for OpenDocument {
+    type Input = ();
+
+    fn parse(&self, (): ()) -> impl Future<Output = Result<ParseResult, LiteParseError>> + Send {
+        OpenDocument::parse(self)
+    }
+
+    fn parse_pages<P>(
+        &self,
+        (): (),
+        page_numbers: P,
+    ) -> impl Future<Output = Result<ParseResult, LiteParseError>> + Send
+    where
+        P: AsRef<[u32]> + Send,
+    {
+        OpenDocument::parse_pages(self, page_numbers)
     }
 }
 

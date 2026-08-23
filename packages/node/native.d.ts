@@ -569,6 +569,8 @@ export declare class LiteParse {
   constructor(config?: JsLiteParseConfig | undefined | null)
   /** Parse a document. Accepts a file path (string) or raw PDF bytes (Buffer). */
   parse(input: string | Buffer): Promise<JsParseResult>
+  /** Parse an explicit set of 1-based pages from a document source. */
+  parseSourcePages(input: string | Buffer, pageNumbers: Array<number>): Promise<JsParseResult>
   /** Open a document for repeated page operations. */
   openDocument(input: string | Buffer): Promise<OpenDocument>
   /**

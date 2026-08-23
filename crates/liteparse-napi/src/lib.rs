@@ -67,6 +67,28 @@ impl LiteParse {
         Ok(JsParseResult::from_rust(&result, &self.config))
     }
 
+    /// Parse an explicit set of 1-based pages from a document source.
+    #[napi]
+    pub async fn parse_source_pages(
+        &self,
+        input: Either<String, Buffer>,
+        page_numbers: Vec<f64>,
+    ) -> Result<JsParseResult> {
+        use liteparse::types::PdfInput;
+
+        let pdf_input = match input {
+            Either::A(path) => PdfInput::Path(path),
+            Either::B(buf) => PdfInput::Bytes(buf.to_vec()),
+        };
+        let page_numbers = page_numbers_from_js(page_numbers)?;
+        let result = self
+            .inner
+            .parse_pages_input(pdf_input, page_numbers)
+            .await
+            .map_err(|error| Error::from_reason(error.to_string()))?;
+        Ok(JsParseResult::from_rust(&result, &self.config))
+    }
+
     /// Open a document for repeated page operations.
     #[napi]
     pub async fn open_document(&self, input: Either<String, Buffer>) -> Result<OpenDocument> {

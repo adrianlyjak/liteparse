@@ -1,5 +1,6 @@
 """LiteParse Python wrapper - native Rust bindings via PyO3."""
 
+from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple, Union, cast
 
@@ -436,7 +437,19 @@ def _convert_native_result(native_result: Any) -> ParseResult:
     )
 
 
-class OpenDocument:
+class DocumentOperations(ABC):
+    """Operations available on a parsed document."""
+
+    @abstractmethod
+    def parse(self) -> ParseResult:
+        """Parse the document."""
+
+    @abstractmethod
+    def parse_pages(self, page_numbers: Iterable[int]) -> ParseResult:
+        """Parse explicit 1-based source pages."""
+
+
+class OpenDocument(DocumentOperations):
     """A document normalized to PDF and kept open for page operations."""
 
     def __init__(self, native: Any):
@@ -741,6 +754,29 @@ class LiteParse:
             raise
         except Exception as e:
             raise ParseError(str(e)) from e
+
+    def parse_pages(
+        self,
+        file_data: Union[str, Path, bytes],
+        page_numbers: Iterable[int],
+    ) -> ParseResult:
+        """Parse explicit 1-based source pages in source-document order."""
+        try:
+            pages = list(page_numbers)
+            if isinstance(file_data, bytes):
+                native_result = self._native.parse_pages_bytes(file_data, pages)
+            else:
+                file_path = Path(file_data)
+                if not file_path.exists():
+                    raise FileNotFoundError(f"File not found: {file_path}")
+                native_result = self._native.parse_pages(
+                    str(file_path.absolute()), pages
+                )
+            return _convert_native_result(native_result)
+        except FileNotFoundError:
+            raise
+        except Exception as error:
+            raise ParseError(str(error)) from error
 
     def parse_batches(
         self,

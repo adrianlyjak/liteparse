@@ -1700,6 +1700,26 @@ impl LiteParse {
         ))
     }
 
+    /// Parse explicit 1-based pages from a document path.
+    fn parse_pages(
+        &self,
+        py: Python<'_>,
+        input: String,
+        page_numbers: Vec<u32>,
+    ) -> PyResult<PyParseResult> {
+        self.parse_selected_pages(py, PdfInput::Path(input), page_numbers)
+    }
+
+    /// Parse explicit 1-based pages from raw document bytes.
+    fn parse_pages_bytes(
+        &self,
+        py: Python<'_>,
+        data: Vec<u8>,
+        page_numbers: Vec<u32>,
+    ) -> PyResult<PyParseResult> {
+        self.parse_selected_pages(py, PdfInput::Bytes(data), page_numbers)
+    }
+
     /// Open a document from a file path for repeated page operations.
     fn open_document(&self, py: Python<'_>, input: String) -> PyResult<PyOpenDocument> {
         self.open_retained_document(py, PdfInput::Path(input))
@@ -1832,6 +1852,26 @@ impl LiteParse {
 }
 
 impl LiteParse {
+    fn parse_selected_pages(
+        &self,
+        py: Python<'_>,
+        input: PdfInput,
+        page_numbers: Vec<u32>,
+    ) -> PyResult<PyParseResult> {
+        let result = py
+            .detach(|| {
+                self.runtime
+                    .block_on(self.inner.parse_pages_input(input, page_numbers))
+            })
+            .map_err(|error| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(error.to_string())
+            })?;
+        Ok(PyParseResult::from_rust(
+            result,
+            self.config.extract_text_metadata,
+        ))
+    }
+
     fn open_retained_document(&self, py: Python<'_>, input: PdfInput) -> PyResult<PyOpenDocument> {
         let document = py
             .detach(|| self.runtime.block_on(self.inner.open_document(input)))
