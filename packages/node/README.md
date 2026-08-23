@@ -26,9 +26,6 @@ for (const page of result.pages) {
 }
 ```
 
-Call `await document.reopen()` between large page groups to release PDFium's
-document-level caches without converting the input again.
-
 ### Bounded-memory parsing
 
 For documents with many text items, consume page batches without retaining
@@ -170,6 +167,9 @@ try {
   await document.close();
 }
 ```
+
+Call `await document.reopen()` between large page groups to release PDFium's
+document-level caches without converting the input again.
 
 ## Screenshots
 
