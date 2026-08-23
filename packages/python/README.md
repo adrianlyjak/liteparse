@@ -128,6 +128,9 @@ with parser.open_document("document.pdf") as document:
     result = document.parse_pages([1, 2])
 ```
 
+Call `document.reopen()` between large page groups to release PDFium's
+document-level caches without converting the input again.
+
 ## Screenshots
 
 Generate PNG screenshots of document pages:

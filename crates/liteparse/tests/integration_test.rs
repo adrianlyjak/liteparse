@@ -945,6 +945,28 @@ mod open_document {
             Err(error) => error,
         };
         assert_eq!(parse_error.to_string(), "document is closed");
+        assert_eq!(
+            document.reopen().unwrap_err().to_string(),
+            "document is closed"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn reopen_releases_pdfium_state_without_replacing_the_source() {
+        let parser = parser();
+        let document = parser
+            .open_document(PdfInput::Bytes(std::fs::read(SAMPLE_PDF).unwrap()))
+            .await
+            .unwrap();
+        let before = document.parse().await.unwrap();
+
+        document.reopen().unwrap();
+        let after = document.parse().await.unwrap();
+
+        assert_eq!(document.page_count(), before.total_pages);
+        assert_eq!(after.text, before.text);
+        assert_eq!(after.total_pages, before.total_pages);
     }
 
     #[tokio::test]

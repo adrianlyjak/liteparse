@@ -467,6 +467,13 @@ class OpenDocument:
         """Release the retained document. Safe to call more than once."""
         self._native.close()
 
+    def reopen(self) -> None:
+        """Release PDFium caches and reopen the normalized PDF."""
+        try:
+            self._native.reopen()
+        except Exception as error:
+            raise ParseError(str(error)) from error
+
     def __enter__(self) -> "OpenDocument":
         return self
 

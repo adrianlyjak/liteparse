@@ -20,6 +20,11 @@ try {
     result.pages.map((page) => page.pageNum),
     [1, 3],
   );
+  await document.reopen();
+  assert.deepEqual(
+    (await document.parsePages([3, 1, 3])).pages.map((page) => page.pageNum),
+    [1, 3],
+  );
   await assert.rejects(
     document.parsePages([1.5]),
     /page number must be a finite integer/,
@@ -33,6 +38,7 @@ try {
 }
 
 await assert.rejects(document.parsePages([1]), /document is closed/);
+await assert.rejects(document.reopen(), /document is closed/);
 
 const converted = await parser.openDocument(receipt);
 try {

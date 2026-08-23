@@ -518,6 +518,11 @@ export class OpenDocument {
     return toParseResult(await this._native.parsePages(Array.from(pageNumbers)));
   }
 
+  /** Release PDFium caches and reopen the normalized PDF. */
+  async reopen(): Promise<void> {
+    await this._native.reopen();
+  }
+
   /** Release the retained document. Safe to call more than once. */
   async close(): Promise<void> {
     await this._native.close();

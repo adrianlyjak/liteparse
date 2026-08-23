@@ -46,7 +46,12 @@ def test_open_document_converts_supported_input(
 ) -> None:
     with page_parser.open_document(receipt_image) as document:
         assert document.page_count == 1
-        assert document.parse().total_pages == 1
+        before = document.parse()
+        document.reopen()
+        after = document.parse()
+
+    assert after.total_pages == 1
+    assert after.text == before.text
 
 
 def test_context_manager_closes_document(parser: LiteParse, sample_pdf: Path) -> None:
@@ -55,6 +60,8 @@ def test_context_manager_closes_document(parser: LiteParse, sample_pdf: Path) ->
 
     with pytest.raises(ParseError, match="document is closed"):
         document.parse()
+    with pytest.raises(ParseError, match="document is closed"):
+        document.reopen()
 
 
 def test_parse_pages_sorts_and_deduplicates_in_source_order(

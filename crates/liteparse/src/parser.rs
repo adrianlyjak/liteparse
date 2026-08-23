@@ -307,6 +307,17 @@ struct StoredDocument {
 }
 
 impl StoredDocument {
+    fn reopen(self, password: Option<&str>) -> Result<Self, LiteParseError> {
+        let Self { retained, resolved } = self;
+        let library = Library::init();
+        library.close_retained_document(retained);
+        let document = extract::load_document_from_input(&library, &resolved.input, password)?;
+        // SAFETY: `resolved` remains owned by the returned `StoredDocument`,
+        // and every reborrow/close occurs through `Library`.
+        let retained = unsafe { document.detach()? };
+        Ok(Self { retained, resolved })
+    }
+
     fn close(self) {
         let Self { retained, resolved } = self;
         let library = Library::init();
@@ -1517,6 +1528,24 @@ impl OpenDocument {
         self.parse_selected(Some(&page_numbers)).await
     }
 
+    /// Reopen the PDFium document while retaining the normalized PDF.
+    ///
+    /// This releases document-level PDFium caches without repeating input
+    /// conversion. It waits for the active PDFium transaction, but not for an
+    /// entire async parse spanning OCR awaits. If reopening fails, the
+    /// document is closed.
+    pub fn reopen(&self) -> Result<(), LiteParseError> {
+        let mut stored = self
+            .stored
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let current = stored
+            .take()
+            .ok_or_else(|| LiteParseError::Other("document is closed".to_string()))?;
+        *stored = Some(current.reopen(self.parser.config.password.as_deref())?);
+        Ok(())
+    }
+
     /// Close the retained document. Calling this more than once is a no-op.
     ///
     /// Close waits for the currently active PDFium transaction, prevents new
@@ -1883,6 +1912,12 @@ mod tests {
         };
 
         assert!(std::path::Path::new(&converted_path).exists());
+        assert_eq!(document.parse().await.unwrap().total_pages, 1);
+        document.reopen().unwrap();
+        assert!(
+            std::path::Path::new(&converted_path).exists(),
+            "reopening should retain the converted temporary PDF"
+        );
         assert_eq!(document.parse().await.unwrap().total_pages, 1);
         document.close();
         assert!(!std::path::Path::new(&converted_path).exists());

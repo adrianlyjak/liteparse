@@ -1379,6 +1379,11 @@ impl PyOpenDocument {
     fn close(&self, py: Python<'_>) {
         py.detach(|| self.inner.close());
     }
+
+    fn reopen(&self, py: Python<'_>) -> PyResult<()> {
+        py.detach(|| self.inner.reopen())
+            .map_err(|error| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(error.to_string()))
+    }
 }
 
 // ---------------------------------------------------------------------------

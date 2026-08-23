@@ -246,27 +246,51 @@ impl OpenDocument {
         Ok(JsParseResult::from_rust(&result, &self.config))
     }
 
+    /// Reopen the PDFium document while retaining the normalized PDF.
+    #[napi(ts_return_type = "Promise<void>")]
+    pub fn reopen(&self) -> AsyncTask<DocumentTask> {
+        AsyncTask::new(DocumentTask {
+            document: self.inner.clone(),
+            operation: DocumentOperation::Reopen,
+        })
+    }
+
     /// Release the retained document. Idempotent.
     #[napi(ts_return_type = "Promise<void>")]
-    pub fn close(&self) -> AsyncTask<CloseDocumentTask> {
-        AsyncTask::new(CloseDocumentTask {
+    pub fn close(&self) -> AsyncTask<DocumentTask> {
+        AsyncTask::new(DocumentTask {
             document: self.inner.clone(),
+            operation: DocumentOperation::Close,
         })
     }
 }
 
-pub struct CloseDocumentTask {
+enum DocumentOperation {
+    Reopen,
+    Close,
+}
+
+pub struct DocumentTask {
     document: std::sync::Arc<liteparse::OpenDocument>,
+    operation: DocumentOperation,
 }
 
 #[napi]
-impl Task for CloseDocumentTask {
+impl Task for DocumentTask {
     type Output = ();
     type JsValue = ();
 
     fn compute(&mut self) -> Result<Self::Output> {
-        self.document.close();
-        Ok(())
+        match self.operation {
+            DocumentOperation::Reopen => self
+                .document
+                .reopen()
+                .map_err(|error| Error::from_reason(error.to_string())),
+            DocumentOperation::Close => {
+                self.document.close();
+                Ok(())
+            }
+        }
     }
 
     fn resolve(&mut self, _env: Env, (): Self::Output) -> Result<Self::JsValue> {
