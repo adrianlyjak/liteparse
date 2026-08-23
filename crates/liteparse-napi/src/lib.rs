@@ -217,13 +217,13 @@ pub struct OpenDocument {
 
 #[napi]
 impl OpenDocument {
-    /// Total pages in the source PDF.
+    /// Total pages in the source document.
     #[napi(getter)]
     pub fn page_count(&self) -> u32 {
         self.inner.page_count()
     }
 
-    /// Parse the retained PDF.
+    /// Parse the retained document.
     #[napi]
     pub async fn parse(&self) -> Result<JsParseResult> {
         let result = self
@@ -246,7 +246,7 @@ impl OpenDocument {
         Ok(JsParseResult::from_rust(&result, &self.config))
     }
 
-    /// Release the retained PDF. Idempotent.
+    /// Release the retained document. Idempotent.
     #[napi(ts_return_type = "Promise<void>")]
     pub fn close(&self) -> AsyncTask<CloseDocumentTask> {
         AsyncTask::new(CloseDocumentTask {

@@ -611,13 +611,13 @@ export declare class LiteParse {
 }
 /** A document normalized to PDF and kept open for repeated page operations. */
 export declare class OpenDocument {
-  /** Total pages in the source PDF. */
+  /** Total pages in the source document. */
   get pageCount(): number
-  /** Parse the retained PDF. */
+  /** Parse the retained document. */
   parse(): Promise<JsParseResult>
   /** Parse an explicit set of 1-based source pages. */
   parsePages(pageNumbers: Array<number>): Promise<JsParseResult>
-  /** Release the retained PDF. Idempotent. */
+  /** Release the retained document. Idempotent. */
   close(): Promise<void>
 }
 /**

@@ -444,11 +444,11 @@ class OpenDocument:
 
     @property
     def page_count(self) -> int:
-        """Total pages in the source PDF."""
+        """Total pages in the source document."""
         return cast(int, self._native.page_count)
 
     def parse(self) -> ParseResult:
-        """Parse the retained PDF."""
+        """Parse the retained document."""
         try:
             return _convert_native_result(self._native.parse())
         except Exception as error:
@@ -464,7 +464,7 @@ class OpenDocument:
             raise ParseError(str(error)) from error
 
     def close(self) -> None:
-        """Release the retained PDF. Safe to call more than once."""
+        """Release the retained document. Safe to call more than once."""
         self._native.close()
 
     def __enter__(self) -> "OpenDocument":

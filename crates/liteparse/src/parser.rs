@@ -1440,7 +1440,7 @@ impl DocumentOperations for LiteParse {
 }
 
 impl OpenDocument {
-    /// Total pages in the retained source PDF.
+    /// Total pages in the retained document.
     pub fn page_count(&self) -> u32 {
         self.page_count
     }
@@ -1472,7 +1472,7 @@ impl OpenDocument {
         Ok(result)
     }
 
-    /// Parse the retained PDF with the configuration used to open it.
+    /// Parse the retained document with the configuration used to open it.
     ///
     /// OCR awaits occur between short PDFium transactions. A concurrent
     /// [`OpenDocument::close`] waits only for the active transaction and can
@@ -1517,7 +1517,7 @@ impl OpenDocument {
         self.parse_selected(Some(&page_numbers)).await
     }
 
-    /// Close the retained PDF. Calling this more than once is a no-op.
+    /// Close the retained document. Calling this more than once is a no-op.
     ///
     /// Close waits for the currently active PDFium transaction, prevents new
     /// transactions, and returns after PDFium has released the document. It

@@ -518,7 +518,7 @@ export class OpenDocument {
     return toParseResult(await this._native.parsePages(Array.from(pageNumbers)));
   }
 
-  /** Release the retained PDF. Safe to call more than once. */
+  /** Release the retained document. Safe to call more than once. */
   async close(): Promise<void> {
     await this._native.close();
   }
