@@ -501,7 +501,7 @@ export interface ScreenshotResult {
   rects: ScreenshotRect[];
 }
 
-/** A PDF kept open for repeated page operations. */
+/** A document normalized to PDF and kept open for repeated page operations. */
 export class OpenDocument {
   constructor(private readonly _native: NativeOpenDocument) {}
 
@@ -725,7 +725,7 @@ export class LiteParse {
     return toParseResult(result);
   }
 
-  /** Open a PDF for repeated page operations. */
+  /** Open a document for repeated page operations. */
   async openDocument(input: LiteParseInput): Promise<OpenDocument> {
     const nativeInput =
       typeof input === "string" ? input : Buffer.from(input);

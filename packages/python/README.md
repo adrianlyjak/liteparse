@@ -114,9 +114,10 @@ with open("document.pdf", "rb") as f:
 print(result.text)
 ```
 
-## Keep a PDF Open
+## Keep a Document Open
 
-Open a PDF once when you need to parse several page selections:
+Open a document once when you need to parse several page selections. Supported
+non-PDF inputs are converted to a temporary PDF once:
 
 ```python
 from liteparse import LiteParse

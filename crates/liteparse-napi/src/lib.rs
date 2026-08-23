@@ -67,16 +67,20 @@ impl LiteParse {
         Ok(JsParseResult::from_rust(&result, &self.config))
     }
 
-    /// Open a PDF for repeated page operations.
-    #[napi(ts_return_type = "Promise<OpenDocument>")]
-    pub fn open_document(&self, input: Either<String, Buffer>) -> AsyncTask<OpenDocumentTask> {
+    /// Open a document for repeated page operations.
+    #[napi]
+    pub async fn open_document(&self, input: Either<String, Buffer>) -> Result<OpenDocument> {
         let input = match input {
             Either::A(path) => liteparse::types::PdfInput::Path(path),
             Either::B(buf) => liteparse::types::PdfInput::Bytes(buf.to_vec()),
         };
-        AsyncTask::new(OpenDocumentTask {
-            parser: self.inner.clone(),
-            input: Some(input),
+        let document = self
+            .inner
+            .open_document(input)
+            .await
+            .map_err(|error| Error::from_reason(error.to_string()))?;
+        Ok(OpenDocument {
+            inner: std::sync::Arc::new(document),
             config: self.config.clone(),
         })
     }
@@ -204,32 +208,7 @@ impl LiteParse {
     }
 }
 
-pub struct OpenDocumentTask {
-    parser: liteparse::LiteParse,
-    input: Option<liteparse::types::PdfInput>,
-    config: liteparse::config::LiteParseConfig,
-}
-
-#[napi]
-impl Task for OpenDocumentTask {
-    type Output = liteparse::OpenDocument;
-    type JsValue = OpenDocument;
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        self.parser
-            .open_document(self.input.take().expect("open task runs once"))
-            .map_err(|error| Error::from_reason(error.to_string()))
-    }
-
-    fn resolve(&mut self, _env: Env, document: Self::Output) -> Result<Self::JsValue> {
-        Ok(OpenDocument {
-            inner: std::sync::Arc::new(document),
-            config: self.config.clone(),
-        })
-    }
-}
-
-/// A PDF kept open for repeated page operations.
+/// A document normalized to PDF and kept open for repeated page operations.
 #[napi]
 pub struct OpenDocument {
     inner: std::sync::Arc<liteparse::OpenDocument>,

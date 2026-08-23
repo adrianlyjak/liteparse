@@ -6,6 +6,9 @@ import { LiteParse } from "../dist/lib.js";
 const fixture = fileURLToPath(
   new URL("../../../integration_tests_data/filled_acroform.pdf", import.meta.url),
 );
+const receipt = fileURLToPath(
+  new URL("../../../integration_tests_data/receipt.png", import.meta.url),
+);
 const parser = new LiteParse({ ocrEnabled: false, quiet: true });
 const document = await parser.openDocument(fixture);
 
@@ -30,3 +33,11 @@ try {
 }
 
 await assert.rejects(document.parsePages([1]), /document is closed/);
+
+const converted = await parser.openDocument(receipt);
+try {
+  assert.equal(converted.pageCount, 1);
+  assert.equal((await converted.parse()).totalPages, 1);
+} finally {
+  await converted.close();
+}

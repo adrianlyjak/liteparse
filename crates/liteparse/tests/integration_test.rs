@@ -920,7 +920,7 @@ mod open_document {
         let expected = parser.parse(SAMPLE_PDF).await.unwrap();
         let document = {
             let bytes = std::fs::read(SAMPLE_PDF).unwrap();
-            parser.open_document(PdfInput::Bytes(bytes)).unwrap()
+            parser.open_document(PdfInput::Bytes(bytes)).await.unwrap()
         };
 
         assert_eq!(document.page_count(), expected.total_pages);
@@ -935,6 +935,7 @@ mod open_document {
     async fn close_is_idempotent_and_rejects_later_work() {
         let document = parser()
             .open_document(PdfInput::Path(SAMPLE_PDF.into()))
+            .await
             .unwrap();
         document.close();
         document.close();
@@ -951,6 +952,7 @@ mod open_document {
     async fn parse_pages_sorts_and_deduplicates_in_source_order() {
         let document = parser()
             .open_document(PdfInput::Path(ACROFORM_PDF.into()))
+            .await
             .unwrap();
 
         let parsed = document.parse_pages(vec![3, 1, 3]).await.unwrap();
@@ -971,6 +973,7 @@ mod open_document {
     async fn parse_pages_validates_the_entire_selection_before_parsing() {
         let document = parser()
             .open_document(PdfInput::Path(ACROFORM_PDF.into()))
+            .await
             .unwrap();
 
         for (pages, expected) in [
@@ -1006,6 +1009,7 @@ mod open_document {
             ..Default::default()
         })
         .open_document(PdfInput::Path(ACROFORM_PDF.into()))
+        .await
         .unwrap();
 
         let parsed = document.parse_pages(vec![3, 1, 3]).await.unwrap();
@@ -1025,6 +1029,7 @@ mod open_document {
             ..Default::default()
         })
         .open_document(PdfInput::Path(ACROFORM_PDF.into()))
+        .await
         .unwrap();
 
         let parsed = document.parse_pages(vec![2]).await.unwrap();
@@ -1038,6 +1043,7 @@ mod open_document {
     async fn parse_pages_reports_closed_before_selection_errors() {
         let document = parser()
             .open_document(PdfInput::Path(ACROFORM_PDF.into()))
+            .await
             .unwrap();
         document.close();
 
@@ -1050,17 +1056,19 @@ mod open_document {
         }
     }
 
-    #[test]
+    #[tokio::test]
     #[serial]
-    fn open_document_is_pdf_only() {
-        let error = parser()
-            .open_document(PdfInput::Path("not-a-pdf.png".into()))
-            .err()
-            .expect("non-PDF paths should be rejected");
-        assert_eq!(
-            error.to_string(),
-            "invalid config: open_document accepts PDF input only"
-        );
+    async fn open_document_converts_supported_inputs() {
+        let document = parser()
+            .open_document(PdfInput::Path(
+                "../../integration_tests_data/receipt.png".into(),
+            ))
+            .await
+            .expect("a supported image should open through PDF conversion");
+
+        assert_eq!(document.page_count(), 1);
+        assert_eq!(document.parse().await.unwrap().total_pages, 1);
+        document.close();
     }
 
     #[tokio::test]
@@ -1075,6 +1083,7 @@ mod open_document {
         let expected = parser.parse(ACROFORM_PDF).await.unwrap();
         let document = parser
             .open_document(PdfInput::Path(ACROFORM_PDF.into()))
+            .await
             .unwrap();
         let first = document.parse().await.unwrap();
         let second = document.parse().await.unwrap();
@@ -1095,15 +1104,18 @@ mod open_document {
         document.close();
     }
 
-    #[test]
+    #[tokio::test]
     #[serial]
-    fn idle_document_releases_the_global_pdfium_lock() {
+    async fn idle_document_releases_the_global_pdfium_lock() {
         let idle = parser()
             .open_document(PdfInput::Path(ACROFORM_PDF.into()))
+            .await
             .unwrap();
         let (sent, received) = std::sync::mpsc::channel();
         let worker = std::thread::spawn(move || {
-            let opened = parser().open_document(PdfInput::Path(SAMPLE_PDF.into()));
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            let opened =
+                runtime.block_on(parser().open_document(PdfInput::Path(SAMPLE_PDF.into())));
             sent.send(opened).unwrap();
         });
         let unrelated = received
@@ -1122,12 +1134,14 @@ mod open_document {
         {
             let document = parser()
                 .open_document(PdfInput::Bytes(std::fs::read(SAMPLE_PDF).unwrap()))
+                .await
                 .unwrap();
             assert!(!document.parse().await.unwrap().text.is_empty());
         }
 
         let next = parser()
             .open_document(PdfInput::Path(SAMPLE_PDF.into()))
+            .await
             .unwrap();
         assert_eq!(next.page_count(), 1);
         next.close();

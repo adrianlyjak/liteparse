@@ -104,10 +104,11 @@ const buffer = Buffer.from(await response.arrayBuffer());
 const result2 = await parser.parse(buffer);
 ```
 
-### Keeping a PDF open
+### Keeping a document open
 
-Open a PDF once when you need to parse several page selections. Open documents
-accept PDF paths or buffers and do not convert other file formats.
+Open a document once when you need to parse several page selections. Supported
+office and image inputs are converted to a temporary PDF once. The temporary
+file remains alive until `close()` finishes.
 
 ```typescript
 const parser = new LiteParse({ ocrEnabled: false });
@@ -216,11 +217,11 @@ result = parser.parse(pdf_bytes)
 print(result.text)
 ```
 
-### Keeping a PDF open
+### Keeping a document open
 
-Open a PDF once when you need to parse several page selections. Open documents
-accept PDF paths or bytes and do not convert other file formats. The context
-manager closes the document when the block exits.
+Open a document once when you need to parse several page selections. Supported
+office and image inputs are converted to a temporary PDF once. The context
+manager closes the document and removes the temporary file when the block exits.
 
 ```python
 parser = LiteParse(ocr_enabled=False)
@@ -292,17 +293,21 @@ let pdf_bytes = std::fs::read("document.pdf")?;
 let result = parser.parse_input(PdfInput::Bytes(pdf_bytes)).await?;
 ```
 
-### Keeping a PDF open
+### Keeping a document open
 
-Open a PDF once when you need to parse several page selections. `open_document`
-accepts PDF paths or bytes and does not convert other file formats.
+Open a document once when you need to parse several page selections. Native
+builds convert supported office and image inputs to a temporary PDF once. The
+temporary file remains alive until `close()` finishes. WASM accepts PDF bytes
+only.
 
 ```rust
 use liteparse::types::PdfInput;
 use liteparse::{LiteParse, LiteParseConfig};
 
 let parser = LiteParse::new(LiteParseConfig::default());
-let document = parser.open_document(PdfInput::Path("document.pdf".into()))?;
+let document = parser
+    .open_document(PdfInput::Path("document.pdf".into()))
+    .await?;
 
 println!("{} pages", document.page_count());
 let first_pages = document.parse_pages([1, 2]).await?;

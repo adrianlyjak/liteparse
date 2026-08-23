@@ -178,8 +178,8 @@ fn default_glyph_resolver() -> Option<std::sync::Arc<dyn crate::GlyphResolver>> 
 ///
 /// Holds the [`conversion::PdfInputGuard`] so the temporary file produced for
 /// a DOCX/XLSX/PPTX/image source stays alive for as long as the resolved input
-/// is usable. Reusing one of these across several parses is what keeps batch
-/// parsing from re-running LibreOffice for every batch.
+/// is usable. Retained documents and batch sessions reuse the resolved input
+/// so conversion runs once.
 pub(crate) struct ResolvedInput {
     input: PdfInput,
     #[cfg(not(target_arch = "wasm32"))]
@@ -316,7 +316,7 @@ impl StoredDocument {
     }
 }
 
-/// A PDF kept open for repeated page operations.
+/// A document normalized to PDF and kept open for repeated page operations.
 ///
 /// Each PDFium transaction holds the document mutex. [`OpenDocument::close`]
 /// waits for the transaction currently holding it, removes the retained
@@ -961,20 +961,13 @@ impl LiteParse {
         self.parse_pages_input(input, page_numbers).await
     }
 
-    /// Open a PDF for repeated page operations.
+    /// Open a document for repeated page operations.
     ///
-    /// Unlike [`LiteParse::parse_input`], this synchronous API does not
-    /// convert non-PDF inputs.
-    pub fn open_document(&self, input: PdfInput) -> Result<OpenDocument, LiteParseError> {
+    /// Native builds convert supported non-PDF inputs to a temporary PDF once.
+    /// The temporary file remains alive until the returned document closes.
+    /// On `wasm32`, this method accepts PDF bytes only.
+    pub async fn open_document(&self, input: PdfInput) -> Result<OpenDocument, LiteParseError> {
         self.validate_output_config()?;
-        #[cfg(not(target_arch = "wasm32"))]
-        if let PdfInput::Path(path) = &input
-            && !conversion::is_pdf(path)
-        {
-            return Err(LiteParseError::Config(
-                "open_document accepts PDF input only".to_string(),
-            ));
-        }
         #[cfg(target_arch = "wasm32")]
         if matches!(input, PdfInput::Path(_)) {
             return Err(LiteParseError::Config(
@@ -982,11 +975,7 @@ impl LiteParse {
             ));
         }
 
-        let resolved = ResolvedInput {
-            input,
-            #[cfg(not(target_arch = "wasm32"))]
-            guard: None,
-        };
+        let resolved = self.resolve_input(input).await?;
         let (retained, page_count) = {
             let library = Library::init();
             let document = extract::load_document_from_input(
@@ -1866,8 +1855,41 @@ mod tests {
         );
     }
 
-    #[test]
-    fn close_waits_for_an_active_pdfium_transaction() {
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn open_document_owns_converted_source_until_close() {
+        let document = LiteParse::new(LiteParseConfig {
+            ocr_enabled: false,
+            quiet: true,
+            ..Default::default()
+        })
+        .open_document(PdfInput::Bytes(
+            std::fs::read("../../integration_tests_data/receipt.png").unwrap(),
+        ))
+        .await
+        .expect("a supported image should open through PDF conversion");
+
+        let converted_path = {
+            let stored = document
+                .stored
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let stored = stored.as_ref().expect("the document should be open");
+            assert!(stored.resolved.is_converted());
+            match &stored.resolved.input {
+                PdfInput::Path(path) => path.clone(),
+                PdfInput::Bytes(_) => panic!("converted input should use a temporary PDF"),
+            }
+        };
+
+        assert!(std::path::Path::new(&converted_path).exists());
+        assert_eq!(document.parse().await.unwrap().total_pages, 1);
+        document.close();
+        assert!(!std::path::Path::new(&converted_path).exists());
+    }
+
+    #[tokio::test]
+    async fn close_waits_for_an_active_pdfium_transaction() {
         use std::sync::Arc;
         use std::sync::mpsc;
         use std::time::Duration;
@@ -1881,6 +1903,7 @@ mod tests {
             .open_document(PdfInput::Bytes(
                 include_bytes!("../../../integration_tests_data/sample.pdf").to_vec(),
             ))
+            .await
             .unwrap(),
         );
         let (entered_tx, entered_rx) = mpsc::channel();
@@ -1924,6 +1947,7 @@ mod tests {
         .open_document(PdfInput::Bytes(
             include_bytes!("../../../integration_tests_data/sample.pdf").to_vec(),
         ))
+        .await
         .unwrap();
 
         assert!(document.outline.get().is_none());

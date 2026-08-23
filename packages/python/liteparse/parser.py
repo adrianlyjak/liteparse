@@ -437,7 +437,7 @@ def _convert_native_result(native_result: Any) -> ParseResult:
 
 
 class OpenDocument:
-    """A PDF kept open for repeated page operations."""
+    """A document normalized to PDF and kept open for page operations."""
 
     def __init__(self, native: Any):
         self._native = native
@@ -689,7 +689,7 @@ class LiteParse:
         self,
         file_data: Union[str, Path, bytes],
     ) -> OpenDocument:
-        """Open a PDF for repeated page operations."""
+        """Open a document for repeated page operations."""
         try:
             if isinstance(file_data, bytes):
                 native = self._native.open_document_bytes(file_data)
