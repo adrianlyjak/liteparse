@@ -1031,7 +1031,7 @@ impl<'doc, 'lib: 'doc> Page<'doc, 'lib> {
     /// extraction on the original page content — when the pdfium build omits
     /// the flatten API, or when suppression or flattening fails, in which case
     /// any changed flags are restored first.
-    pub fn flatten_form_widgets_for_display(&self) -> bool {
+    pub(crate) fn flatten_form_widgets_for_display(&self) -> bool {
         // `fpdf_flatten.h` is an optional pdfium API; trimmed builds omit it.
         // Missing it costs form-value text, not the whole parse.
         let Some(api) = FlattenApi::load() else {

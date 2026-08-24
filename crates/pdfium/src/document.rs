@@ -35,7 +35,7 @@ pub struct RetainedDocument {
 }
 
 // SAFETY: PDFium's `public/fpdfview.h` says applications must not call PDFium
-// APIs simultaneously; it does not bind a handle to the thread that opened it.
+// APIs simultaneously. It does not bind a handle to the thread that opened it.
 // This token has no PDFium operations, is deliberately !Sync, and can only be
 // reborrowed or closed through `Library`, which holds LiteParse's process-global
 // mutex.
@@ -156,9 +156,11 @@ impl<'lib> Document<'lib> {
     }
 
     /// Initialize read-only AcroForm access. Returns `None` for documents with
-    /// no form catalog or when PDFium rejects the form-fill environment.
+    /// no form catalog, for retained-document reborrows, or when PDFium rejects
+    /// the form-fill environment. Form actions can mutate document state, so
+    /// retained canonical documents must use a fresh owning document instead.
     pub fn form_environment(&self) -> Option<FormEnvironment<'_, 'lib>> {
-        if self.form_type() == 0 {
+        if !self.owns_handle || self.form_type() == 0 {
             return None;
         }
         let mut callbacks = Box::new(pdfium_sys::FPDF_FORMFILLINFO::default());
@@ -197,6 +199,9 @@ impl<'lib> Document<'lib> {
     /// Returns `Ok(None)` when nothing was flattened — the caller should keep
     /// using its existing page.
     pub fn flatten_form_widgets(&self, index: i32) -> Result<Option<Page<'_, 'lib>>, PdfiumError> {
+        if !self.owns_handle {
+            return Err(PdfiumError::OperationFailed);
+        }
         {
             let page = self.page(index)?;
             if !page.flatten_form_widgets_for_display() {
