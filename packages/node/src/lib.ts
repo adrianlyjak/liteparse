@@ -9,6 +9,7 @@ import {
   type NativeExtractedImage,
   type NativeStructureTreeElement,
   type NativePageComplexityStats,
+  type NativeOpenDocument,
   type NativeScreenshotResult,
 } from "./native.js";
 
@@ -500,6 +501,42 @@ export interface ScreenshotResult {
   rects: ScreenshotRect[];
 }
 
+/** Operations available on a document with the given source arguments. */
+export interface DocumentOperations<SourceArgs extends unknown[]> {
+  parse(...source: SourceArgs): Promise<ParseResult>;
+  parsePages(
+    ...args: [...SourceArgs, pageNumbers: readonly number[]]
+  ): Promise<ParseResult>;
+}
+
+/** A document normalized to PDF and kept open for repeated page operations. */
+export class OpenDocument implements DocumentOperations<[]> {
+  constructor(private readonly _native: NativeOpenDocument) {}
+
+  get pageCount(): number {
+    return this._native.pageCount;
+  }
+
+  async parse(): Promise<ParseResult> {
+    return toParseResult(await this._native.parse());
+  }
+
+  /** Parse explicit 1-based source pages in source-document order. */
+  async parsePages(pageNumbers: readonly number[]): Promise<ParseResult> {
+    return toParseResult(await this._native.parsePages(Array.from(pageNumbers)));
+  }
+
+  /** Release PDFium caches and reopen the normalized PDF. */
+  async reopen(): Promise<void> {
+    await this._native.reopen();
+  }
+
+  /** Release the retained document. Safe to call more than once. */
+  async close(): Promise<void> {
+    await this._native.close();
+  }
+}
+
 /** One solid rectangle (or line) detected in a rendered page bitmap. */
 export interface ScreenshotRect {
   x: number;
@@ -603,7 +640,7 @@ export interface LayoutComplexityStats {
 // LiteParse class
 // ---------------------------------------------------------------------------
 
-export class LiteParse {
+export class LiteParse implements DocumentOperations<[input: LiteParseInput]> {
   private _native: LiteParseNative;
   private _config: LiteParseConfig;
 
@@ -701,6 +738,13 @@ export class LiteParse {
     return toParseResult(result);
   }
 
+  /** Open a document for repeated page operations. */
+  async openDocument(input: LiteParseInput): Promise<OpenDocument> {
+    const nativeInput =
+      typeof input === "string" ? input : Buffer.from(input);
+    return new OpenDocument(await this._native.openDocument(nativeInput));
+  }
+
   /**
    * Parse a document in bounded-memory page batches of `batchSize` pages.
    *
@@ -759,8 +803,26 @@ export class LiteParse {
    * text-extraction / font-recovery owns the text content. Synchronous: no
    * PDFium load and no OCR on this path.
    */
-  parsePages(pages: PageInput[]): ParseResult {
-    const nativePages: NativePageInput[] = pages.map((p) => ({
+  parsePages(pages: PageInput[]): ParseResult;
+  parsePages(
+    input: LiteParseInput,
+    pageNumbers: readonly number[],
+  ): Promise<ParseResult>;
+  parsePages(
+    inputOrPages: LiteParseInput | PageInput[],
+    pageNumbers?: readonly number[],
+  ): ParseResult | Promise<ParseResult> {
+    if (!Array.isArray(inputOrPages)) {
+      const nativeInput =
+        typeof inputOrPages === "string"
+          ? inputOrPages
+          : Buffer.from(inputOrPages);
+      return this._native
+        .parseSourcePages(nativeInput, Array.from(pageNumbers ?? []))
+        .then(toParseResult);
+    }
+
+    const nativePages: NativePageInput[] = inputOrPages.map((p) => ({
       pageNumber: p.pageNumber,
       pageWidth: p.pageWidth,
       pageHeight: p.pageHeight,

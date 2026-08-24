@@ -150,6 +150,27 @@ const result = await parser.parse(pdfBytes);
 console.log(result.text);
 ```
 
+## Keep a Document Open
+
+Open a document once when you need to parse several page selections. Supported
+non-PDF inputs are converted to a temporary PDF once:
+
+```typescript
+import { LiteParse } from '@llamaindex/liteparse';
+
+const parser = new LiteParse({ ocrEnabled: false });
+const document = await parser.openDocument('document.pdf');
+try {
+  console.log(document.pageCount);
+  const result = await document.parsePages([1, 2]);
+} finally {
+  await document.close();
+}
+```
+
+Call `await document.reopen()` between large page groups to release PDFium's
+document-level caches without converting the input again.
+
 ## Screenshots
 
 Generate PNG screenshots of document pages:

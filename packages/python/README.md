@@ -114,6 +114,23 @@ with open("document.pdf", "rb") as f:
 print(result.text)
 ```
 
+## Keep a Document Open
+
+Open a document once when you need to parse several page selections. Supported
+non-PDF inputs are converted to a temporary PDF once:
+
+```python
+from liteparse import LiteParse
+
+parser = LiteParse(ocr_enabled=False)
+with parser.open_document("document.pdf") as document:
+    print(document.page_count)
+    result = document.parse_pages([1, 2])
+```
+
+Call `document.reopen()` between large page groups to release PDFium's
+document-level caches without converting the input again.
+
 ## Screenshots
 
 Generate PNG screenshots of document pages:

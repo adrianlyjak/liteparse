@@ -178,12 +178,12 @@ fn default_glyph_resolver() -> Option<std::sync::Arc<dyn crate::GlyphResolver>> 
 ///
 /// Holds the [`conversion::PdfInputGuard`] so the temporary file produced for
 /// a DOCX/XLSX/PPTX/image source stays alive for as long as the resolved input
-/// is usable. Reusing one of these across several parses is what keeps batch
-/// parsing from re-running LibreOffice for every batch.
+/// is usable. Retained documents and batch sessions reuse the resolved input
+/// so conversion runs once.
 pub(crate) struct ResolvedInput {
     input: PdfInput,
     #[cfg(not(target_arch = "wasm32"))]
-    guard: conversion::PdfInputGuard,
+    guard: Option<conversion::PdfInputGuard>,
 }
 
 impl ResolvedInput {
@@ -192,7 +192,9 @@ impl ResolvedInput {
     fn is_converted(&self) -> bool {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            self.guard.is_converted()
+            self.guard
+                .as_ref()
+                .is_some_and(conversion::PdfInputGuard::is_converted)
         }
         #[cfg(target_arch = "wasm32")]
         {
@@ -230,6 +232,7 @@ struct ExtractionRequest<'a> {
 struct PdfTransaction<'a> {
     library: &'a Library,
     resolved: &'a ResolvedInput,
+    canonical: Option<pdfium::Document<'a>>,
 }
 
 /// Run an operation while a PDFium transaction is active.
@@ -298,6 +301,45 @@ where
     Ok(page_numbers)
 }
 
+struct StoredDocument {
+    retained: pdfium::RetainedDocument,
+    resolved: ResolvedInput,
+}
+
+impl StoredDocument {
+    fn reopen(self, password: Option<&str>) -> Result<Self, LiteParseError> {
+        let Self { retained, resolved } = self;
+        let library = Library::init();
+        library.close_retained_document(retained);
+        let document = extract::load_document_from_input(&library, &resolved.input, password)?;
+        // SAFETY: `resolved` remains owned by the returned `StoredDocument`,
+        // and every reborrow/close occurs through `Library`.
+        let retained = unsafe { document.detach()? };
+        Ok(Self { retained, resolved })
+    }
+
+    fn close(self) {
+        let Self { retained, resolved } = self;
+        let library = Library::init();
+        library.close_retained_document(retained);
+        drop(library);
+        drop(resolved);
+    }
+}
+
+/// A document normalized to PDF and kept open for repeated page operations.
+///
+/// Each PDFium transaction holds the document mutex. [`OpenDocument::close`]
+/// waits for the transaction currently holding it, removes the retained
+/// document, and prevents later transactions. An async parse releases the
+/// document while OCR runs. If close wins then, the parse stops when it next
+/// needs PDFium.
+pub struct OpenDocument {
+    stored: std::sync::Mutex<Option<StoredDocument>>,
+    parser: LiteParse,
+    page_count: u32,
+    outline: std::sync::OnceLock<Vec<OutlineTarget>>,
+}
 impl DocumentAccess for ReopeningDocumentAccess<'_> {
     fn transact<T, F>(&self, operation: F) -> Result<T, LiteParseError>
     where
@@ -307,6 +349,29 @@ impl DocumentAccess for ReopeningDocumentAccess<'_> {
         operation(PdfTransaction {
             library: &library,
             resolved: self.resolved,
+            canonical: None,
+        })
+    }
+}
+
+impl DocumentAccess for OpenDocument {
+    fn transact<T, F>(&self, operation: F) -> Result<T, LiteParseError>
+    where
+        F: for<'a> FnOnce(PdfTransaction<'a>) -> Result<T, LiteParseError>,
+    {
+        let stored = self
+            .stored
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let stored = stored
+            .as_ref()
+            .ok_or_else(|| LiteParseError::Other("document is closed".to_string()))?;
+        let library = Library::init();
+        let canonical = library.reborrow_document(&stored.retained);
+        operation(PdfTransaction {
+            library: &library,
+            resolved: &stored.resolved,
+            canonical: Some(canonical),
         })
     }
 }
@@ -334,21 +399,46 @@ fn extract_transaction(
     let repaired_input: Option<PdfInput> = None;
     let mut state = {
         let document_input = repaired_input.as_ref().unwrap_or(validated_input);
-        let document =
-            extract::load_document_from_input(transaction.library, document_input, password)?;
-        let source_document = (parser.config.extract_document_metadata
+        // Text extraction flattens visible widget appearances into page content
+        // even when structured form-field output is disabled. Preserve the
+        // retained canonical handle by mutating a fresh document for any form.
+        let needs_scratch = repaired_input.is_some()
+            || transaction
+                .canonical
+                .as_ref()
+                .is_none_or(|document| document.form_type() != 0);
+        let scratch = needs_scratch
+            .then(|| {
+                extract::load_document_from_input(transaction.library, document_input, password)
+            })
+            .transpose()?;
+        let document = scratch
+            .as_ref()
+            .or(transaction.canonical.as_ref())
+            .expect("a PDF transaction must provide or open a document");
+        let source_scratch = (parser.config.extract_document_metadata
             && !transaction.resolved.is_converted()
-            && repaired_input.is_some())
+            && repaired_input.is_some()
+            && transaction.canonical.is_none())
         .then(|| {
             extract::load_document_from_input(transaction.library, validated_input, password).ok()
         })
         .flatten();
+        let source_document = if repaired_input.is_some() {
+            transaction
+                .canonical
+                .as_ref()
+                .or(source_scratch.as_ref())
+                .unwrap_or(document)
+        } else {
+            document
+        };
 
         extract_loaded_document(
             parser,
             &transaction,
-            &document,
-            source_document.as_ref().unwrap_or(&document),
+            document,
+            source_document,
             document_input,
             request,
         )?
@@ -368,13 +458,27 @@ fn render_ocr_transaction(
 ) -> Result<(Vec<ocr_merge::RenderedPage>, usize), LiteParseError> {
     let repaired_input = state.repaired_input.as_ref();
     let input = repaired_input.unwrap_or(&transaction.resolved.input);
-    let document = extract::load_document_from_input(
-        transaction.library,
-        input,
-        parser.config.password.as_deref(),
-    )?;
+    let can_use_canonical = repaired_input.is_none()
+        && reflatten_pages.is_empty()
+        && transaction
+            .canonical
+            .as_ref()
+            .is_some_and(|document| document.form_type() == 0);
+    let scratch = (!can_use_canonical)
+        .then(|| {
+            extract::load_document_from_input(
+                transaction.library,
+                input,
+                parser.config.password.as_deref(),
+            )
+        })
+        .transpose()?;
+    let document = scratch
+        .as_ref()
+        .or(transaction.canonical.as_ref())
+        .expect("a PDF transaction must provide or open a document");
     let (rendered, next_start) = ocr_merge::render_pages_for_ocr(
-        &document,
+        document,
         &state.pages,
         round_start,
         round_rasters,
@@ -868,6 +972,42 @@ impl LiteParse {
         self.parse_pages_input(input, page_numbers).await
     }
 
+    /// Open a document for repeated page operations.
+    ///
+    /// Native builds convert supported non-PDF inputs to a temporary PDF once.
+    /// The temporary file remains alive until the returned document closes.
+    /// On `wasm32`, this method accepts PDF bytes only.
+    pub async fn open_document(&self, input: PdfInput) -> Result<OpenDocument, LiteParseError> {
+        self.validate_output_config()?;
+        #[cfg(target_arch = "wasm32")]
+        if matches!(input, PdfInput::Path(_)) {
+            return Err(LiteParseError::Config(
+                "open_document accepts PDF bytes on wasm32".to_string(),
+            ));
+        }
+
+        let resolved = self.resolve_input(input).await?;
+        let (retained, page_count) = {
+            let library = Library::init();
+            let document = extract::load_document_from_input(
+                &library,
+                &resolved.input,
+                self.config.password.as_deref(),
+            )?;
+            let page_count = document.page_count().max(0) as u32;
+            // SAFETY: `StoredDocument` owns `resolved` until after the handle
+            // is closed, and every reborrow/close occurs through `Library`.
+            let retained = unsafe { document.detach()? };
+            (retained, page_count)
+        };
+
+        Ok(OpenDocument {
+            stored: std::sync::Mutex::new(Some(StoredDocument { retained, resolved })),
+            parser: self.clone(),
+            page_count,
+            outline: std::sync::OnceLock::new(),
+        })
+    }
     /// Convert a non-PDF input to PDF (if needed) and return it alongside the
     /// guard that keeps any temporary file alive.
     ///
@@ -879,7 +1019,10 @@ impl LiteParse {
             let (input, guard) =
                 conversion::resolve_pdf_input(input, self.config.password.as_deref(), false)
                     .await?;
-            Ok(ResolvedInput { input, guard })
+            Ok(ResolvedInput {
+                input,
+                guard: Some(guard),
+            })
         }
         #[cfg(target_arch = "wasm32")]
         {
@@ -1307,6 +1450,133 @@ impl DocumentOperations for LiteParse {
     }
 }
 
+impl OpenDocument {
+    /// Total pages in the retained document.
+    pub fn page_count(&self) -> u32 {
+        self.page_count
+    }
+
+    fn ensure_open(&self) -> Result<(), LiteParseError> {
+        let stored = self
+            .stored
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if stored.is_none() {
+            return Err(LiteParseError::Other("document is closed".to_string()));
+        }
+        Ok(())
+    }
+
+    async fn parse_selected(
+        &self,
+        target_pages: Option<&[u32]>,
+    ) -> Result<ParseResult, LiteParseError> {
+        let outline = self.outline.get().cloned();
+        let should_cache_outline = outline.is_none();
+        let result = self
+            .parser
+            .parse_with_access(self, target_pages, self.parser.config.max_pages, outline)
+            .await?;
+        if should_cache_outline {
+            let _ = self.outline.set(result.outline.clone());
+        }
+        Ok(result)
+    }
+
+    /// Parse the retained document with the configuration used to open it.
+    ///
+    /// OCR awaits occur between short PDFium transactions. A concurrent
+    /// [`OpenDocument::close`] waits only for the active transaction and can
+    /// cause this parse to return `document is closed` at the next one.
+    pub async fn parse(&self) -> Result<ParseResult, LiteParseError> {
+        let target_pages = self.parser.resolve_target_pages()?;
+        self.parse_selected(target_pages.as_deref()).await
+    }
+
+    /// Parse an explicit set of 1-based source pages.
+    ///
+    /// The selection must be nonempty and entirely within the document. Pages
+    /// are sorted and deduplicated into source order, then limited by the
+    /// parser's `max_pages` configuration. This explicit selection ignores the
+    /// parser's configured `target_pages`.
+    pub async fn parse_pages<P>(&self, page_numbers: P) -> Result<ParseResult, LiteParseError>
+    where
+        P: AsRef<[u32]>,
+    {
+        // Closed state takes precedence over argument validation for every
+        // operation on the retained document.
+        self.ensure_open()?;
+        let page_numbers =
+            normalize_page_numbers(page_numbers, self.page_count, self.parser.config.max_pages)?;
+        self.parse_selected(Some(&page_numbers)).await
+    }
+
+    /// Reopen the PDFium document while retaining the normalized PDF.
+    ///
+    /// This releases document-level PDFium caches without repeating input
+    /// conversion. It waits for the active PDFium transaction, but not for an
+    /// entire async parse spanning OCR awaits. If reopening fails, the
+    /// document is closed.
+    pub fn reopen(&self) -> Result<(), LiteParseError> {
+        let mut stored = self
+            .stored
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let current = stored
+            .take()
+            .ok_or_else(|| LiteParseError::Other("document is closed".to_string()))?;
+        *stored = Some(current.reopen(self.parser.config.password.as_deref())?);
+        Ok(())
+    }
+
+    /// Close the retained document. Calling this more than once is a no-op.
+    ///
+    /// Close waits for the currently active PDFium transaction, prevents new
+    /// transactions, and returns after PDFium has released the document. It
+    /// deliberately does not wait for a whole async parse spanning OCR awaits.
+    pub fn close(&self) {
+        let stored = self
+            .stored
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        if let Some(stored) = stored {
+            stored.close();
+        }
+    }
+}
+
+impl DocumentOperations for OpenDocument {
+    type Input = ();
+
+    fn parse(&self, (): ()) -> impl Future<Output = Result<ParseResult, LiteParseError>> + Send {
+        OpenDocument::parse(self)
+    }
+
+    fn parse_pages<P>(
+        &self,
+        (): (),
+        page_numbers: P,
+    ) -> impl Future<Output = Result<ParseResult, LiteParseError>> + Send
+    where
+        P: AsRef<[u32]> + Send,
+    {
+        OpenDocument::parse_pages(self, page_numbers)
+    }
+}
+
+impl Drop for OpenDocument {
+    fn drop(&mut self) {
+        let stored = self
+            .stored
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        if let Some(stored) = stored {
+            stored.close();
+        }
+    }
+}
 /// A document opened once and parsed in bounded page batches.
 pub struct ParseSession {
     parser: LiteParse,
@@ -1614,5 +1884,111 @@ mod tests {
             !std::path::Path::new(&converted_path).exists(),
             "dropping the session should clean up the converted temp PDF"
         );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn open_document_owns_converted_source_until_close() {
+        let document = LiteParse::new(LiteParseConfig {
+            ocr_enabled: false,
+            quiet: true,
+            ..Default::default()
+        })
+        .open_document(PdfInput::Bytes(
+            std::fs::read("../../integration_tests_data/receipt.png").unwrap(),
+        ))
+        .await
+        .expect("a supported image should open through PDF conversion");
+
+        let converted_path = {
+            let stored = document
+                .stored
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let stored = stored.as_ref().expect("the document should be open");
+            assert!(stored.resolved.is_converted());
+            match &stored.resolved.input {
+                PdfInput::Path(path) => path.clone(),
+                PdfInput::Bytes(_) => panic!("converted input should use a temporary PDF"),
+            }
+        };
+
+        assert!(std::path::Path::new(&converted_path).exists());
+        assert_eq!(document.parse().await.unwrap().total_pages, 1);
+        document.reopen().unwrap();
+        assert!(
+            std::path::Path::new(&converted_path).exists(),
+            "reopening should retain the converted temporary PDF"
+        );
+        assert_eq!(document.parse().await.unwrap().total_pages, 1);
+        document.close();
+        assert!(!std::path::Path::new(&converted_path).exists());
+    }
+
+    #[tokio::test]
+    async fn close_waits_for_an_active_pdfium_transaction() {
+        use std::sync::Arc;
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let document = Arc::new(
+            LiteParse::new(LiteParseConfig {
+                ocr_enabled: false,
+                quiet: true,
+                ..Default::default()
+            })
+            .open_document(PdfInput::Bytes(
+                include_bytes!("../../../integration_tests_data/sample.pdf").to_vec(),
+            ))
+            .await
+            .unwrap(),
+        );
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let active_document = Arc::clone(&document);
+        let active = std::thread::spawn(move || {
+            active_document.transact(|transaction| {
+                assert_eq!(transaction.canonical.as_ref().unwrap().page_count(), 1);
+                entered_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                Ok(())
+            })
+        });
+        entered_rx.recv().unwrap();
+
+        let (closed_tx, closed_rx) = mpsc::channel();
+        let closing_document = Arc::clone(&document);
+        let closing = std::thread::spawn(move || {
+            closing_document.close();
+            closed_tx.send(()).unwrap();
+        });
+        assert!(closed_rx.recv_timeout(Duration::from_millis(50)).is_err());
+
+        release_tx.send(()).unwrap();
+        active.join().unwrap().unwrap();
+        closed_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        closing.join().unwrap();
+        assert_eq!(
+            document.transact(|_| Ok(())).unwrap_err().to_string(),
+            "document is closed"
+        );
+    }
+
+    #[tokio::test]
+    async fn open_document_caches_outline_only_after_a_successful_parse() {
+        let document = LiteParse::new(LiteParseConfig {
+            ocr_enabled: false,
+            quiet: true,
+            ..Default::default()
+        })
+        .open_document(PdfInput::Bytes(
+            include_bytes!("../../../integration_tests_data/sample.pdf").to_vec(),
+        ))
+        .await
+        .unwrap();
+
+        assert!(document.outline.get().is_none());
+        document.parse().await.unwrap();
+        assert!(document.outline.get().is_some());
     }
 }

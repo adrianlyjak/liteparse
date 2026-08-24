@@ -569,6 +569,10 @@ export declare class LiteParse {
   constructor(config?: JsLiteParseConfig | undefined | null)
   /** Parse a document. Accepts a file path (string) or raw PDF bytes (Buffer). */
   parse(input: string | Buffer): Promise<JsParseResult>
+  /** Parse an explicit set of 1-based pages from a document source. */
+  parseSourcePages(input: string | Buffer, pageNumbers: Array<number>): Promise<JsParseResult>
+  /** Open a document for repeated page operations. */
+  openDocument(input: string | Buffer): Promise<OpenDocument>
   /**
    * Open a document for bounded-memory batch parsing. Internal plumbing
    * for the JS wrapper's `parseBatches()` — prefer that; it also closes
@@ -606,6 +610,19 @@ export declare class LiteParse {
   screenshot(input: string | Buffer, pageNumbers?: Array<number> | undefined | null): Promise<Array<JsScreenshotResult>>
   /** Get the current configuration. */
   get config(): JsLiteParseConfig
+}
+/** A document normalized to PDF and kept open for repeated page operations. */
+export declare class OpenDocument {
+  /** Total pages in the source document. */
+  get pageCount(): number
+  /** Parse the retained document. */
+  parse(): Promise<JsParseResult>
+  /** Parse an explicit set of 1-based source pages. */
+  parsePages(pageNumbers: Array<number>): Promise<JsParseResult>
+  /** Reopen the PDFium document while retaining the normalized PDF. */
+  reopen(): Promise<void>
+  /** Release the retained document. Idempotent. */
+  close(): Promise<void>
 }
 /**
  * A document opened once and parsed in bounded page batches. Internal

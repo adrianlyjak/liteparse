@@ -105,6 +105,9 @@ pub(crate) fn extract_pages_and_images(
     // One FFI call keeps the per-page annotation walk off the hot path for
     // every document without an AcroForm catalog, which is nearly all of them.
     let document_has_form = document.form_type() != 0;
+    debug_assert!(
+        target_pages.is_none_or(|targets| { targets.windows(2).all(|pair| pair[0] <= pair[1]) })
+    );
     let form_environment = output_options
         .extract_form_fields
         .then(|| document.form_environment())
@@ -113,10 +116,16 @@ pub(crate) fn extract_pages_and_images(
     for page_index in 0..page_count {
         let page_number = page_index as u32 + 1;
 
-        if let Some(targets) = target_pages
-            && !targets.contains(&page_number)
-        {
-            continue;
+        if let Some(targets) = target_pages {
+            let Some(last_target) = targets.last() else {
+                break;
+            };
+            if page_number > *last_target {
+                break;
+            }
+            if targets.binary_search(&page_number).is_err() {
+                continue;
+            }
         }
 
         if pages.len() + page_errors.len() >= max_pages {

@@ -1340,6 +1340,53 @@ impl PyLiteParseConfig {
 }
 
 // ---------------------------------------------------------------------------
+// Open document
+// ---------------------------------------------------------------------------
+
+/// A document normalized to PDF and kept open for repeated page operations.
+#[pyclass(name = "_OpenDocument")]
+struct PyOpenDocument {
+    inner: std::sync::Arc<liteparse::OpenDocument>,
+    runtime: std::sync::Arc<tokio::runtime::Runtime>,
+    extract_text_metadata: bool,
+}
+
+#[pymethods]
+impl PyOpenDocument {
+    #[getter]
+    fn page_count(&self) -> u32 {
+        self.inner.page_count()
+    }
+
+    fn parse(&self, py: Python<'_>) -> PyResult<PyParseResult> {
+        let result = py
+            .detach(|| self.runtime.block_on(self.inner.parse()))
+            .map_err(|error| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(error.to_string())
+            })?;
+        Ok(PyParseResult::from_rust(result, self.extract_text_metadata))
+    }
+
+    fn parse_pages(&self, py: Python<'_>, page_numbers: Vec<u32>) -> PyResult<PyParseResult> {
+        let result = py
+            .detach(|| self.runtime.block_on(self.inner.parse_pages(page_numbers)))
+            .map_err(|error| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(error.to_string())
+            })?;
+        Ok(PyParseResult::from_rust(result, self.extract_text_metadata))
+    }
+
+    fn close(&self, py: Python<'_>) {
+        py.detach(|| self.inner.close());
+    }
+
+    fn reopen(&self, py: Python<'_>) -> PyResult<()> {
+        py.detach(|| self.inner.reopen())
+            .map_err(|error| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(error.to_string()))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Batch parsing
 // ---------------------------------------------------------------------------
 
@@ -1653,6 +1700,36 @@ impl LiteParse {
         ))
     }
 
+    /// Parse explicit 1-based pages from a document path.
+    fn parse_pages(
+        &self,
+        py: Python<'_>,
+        input: String,
+        page_numbers: Vec<u32>,
+    ) -> PyResult<PyParseResult> {
+        self.parse_selected_pages(py, PdfInput::Path(input), page_numbers)
+    }
+
+    /// Parse explicit 1-based pages from raw document bytes.
+    fn parse_pages_bytes(
+        &self,
+        py: Python<'_>,
+        data: Vec<u8>,
+        page_numbers: Vec<u32>,
+    ) -> PyResult<PyParseResult> {
+        self.parse_selected_pages(py, PdfInput::Bytes(data), page_numbers)
+    }
+
+    /// Open a document from a file path for repeated page operations.
+    fn open_document(&self, py: Python<'_>, input: String) -> PyResult<PyOpenDocument> {
+        self.open_retained_document(py, PdfInput::Path(input))
+    }
+
+    /// Open a document from raw bytes for repeated page operations.
+    fn open_document_bytes(&self, py: Python<'_>, data: Vec<u8>) -> PyResult<PyOpenDocument> {
+        self.open_retained_document(py, PdfInput::Bytes(data))
+    }
+
     /// Open a document from a file path for bounded-memory batch parsing.
     /// Internal plumbing for the wrapper's `parse_batches()` — prefer that.
     ///
@@ -1775,6 +1852,39 @@ impl LiteParse {
 }
 
 impl LiteParse {
+    fn parse_selected_pages(
+        &self,
+        py: Python<'_>,
+        input: PdfInput,
+        page_numbers: Vec<u32>,
+    ) -> PyResult<PyParseResult> {
+        let result = py
+            .detach(|| {
+                self.runtime
+                    .block_on(self.inner.parse_pages_input(input, page_numbers))
+            })
+            .map_err(|error| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(error.to_string())
+            })?;
+        Ok(PyParseResult::from_rust(
+            result,
+            self.config.extract_text_metadata,
+        ))
+    }
+
+    fn open_retained_document(&self, py: Python<'_>, input: PdfInput) -> PyResult<PyOpenDocument> {
+        let document = py
+            .detach(|| self.runtime.block_on(self.inner.open_document(input)))
+            .map_err(|error| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(error.to_string())
+            })?;
+        Ok(PyOpenDocument {
+            inner: std::sync::Arc::new(document),
+            runtime: self.runtime.clone(),
+            extract_text_metadata: self.config.extract_text_metadata,
+        })
+    }
+
     /// Shared body of `open_batch_session` / `open_batch_session_bytes`. Not
     /// a `#[pymethods]` entry, so it stays off the Python surface.
     fn open_session(
@@ -1869,6 +1979,7 @@ fn run_cli(args: Vec<String>) -> PyResult<()> {
 #[pymodule]
 fn _liteparse(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<LiteParse>()?;
+    m.add_class::<PyOpenDocument>()?;
     m.add_class::<PyLiteParseConfig>()?;
     m.add_class::<PyParseResult>()?;
     m.add_class::<PyPageError>()?;

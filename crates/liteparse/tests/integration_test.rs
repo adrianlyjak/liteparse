@@ -892,3 +892,189 @@ async fn test_ocr_rounds_fill_across_sparse_pages() {
          rounds are being cut short by page span"
     );
 }
+
+mod open_document {
+    use super::*;
+    use std::time::Duration;
+
+    const SAMPLE_PDF: &str = "../../integration_tests_data/sample.pdf";
+    const ACROFORM_PDF: &str = "../../integration_tests_data/filled_acroform.pdf";
+
+    fn parser() -> LiteParse {
+        LiteParse::new(LiteParseConfig {
+            ocr_enabled: false,
+            quiet: true,
+            ..Default::default()
+        })
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn assert_send_sync<T: Send + Sync>() {}
+
+    #[tokio::test]
+    #[serial]
+    async fn owned_byte_source_matches_one_shot_parse() {
+        #[cfg(not(target_arch = "wasm32"))]
+        assert_send_sync::<liteparse::OpenDocument>();
+        let parser = parser();
+        let expected = parser.parse(SAMPLE_PDF).await.unwrap();
+        let document = {
+            let bytes = std::fs::read(SAMPLE_PDF).unwrap();
+            parser.open_document(PdfInput::Bytes(bytes)).await.unwrap()
+        };
+
+        assert_eq!(document.page_count(), expected.total_pages);
+        let actual = document.parse().await.unwrap();
+        assert_eq!(actual.text, expected.text);
+        assert_eq!(actual.total_pages, expected.total_pages);
+        document.close();
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn close_is_idempotent_and_rejects_later_work() {
+        let document = parser()
+            .open_document(PdfInput::Path(SAMPLE_PDF.into()))
+            .await
+            .unwrap();
+        document.close();
+        document.close();
+
+        let parse_error = match document.parse().await {
+            Ok(_) => panic!("parsing a closed document should fail"),
+            Err(error) => error,
+        };
+        assert_eq!(parse_error.to_string(), "document is closed");
+        assert_eq!(
+            document.reopen().unwrap_err().to_string(),
+            "document is closed"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn reopen_releases_pdfium_state_without_replacing_the_source() {
+        let parser = parser();
+        let document = parser
+            .open_document(PdfInput::Bytes(std::fs::read(SAMPLE_PDF).unwrap()))
+            .await
+            .unwrap();
+        let before = document.parse().await.unwrap();
+
+        document.reopen().unwrap();
+        let after = document.parse().await.unwrap();
+
+        assert_eq!(document.page_count(), before.total_pages);
+        assert_eq!(after.text, before.text);
+        assert_eq!(after.total_pages, before.total_pages);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn parse_pages_reports_closed_before_selection_errors() {
+        let document = parser()
+            .open_document(PdfInput::Path(ACROFORM_PDF.into()))
+            .await
+            .unwrap();
+        document.close();
+
+        for pages in [vec![], vec![0], vec![4]] {
+            let error = match document.parse_pages(pages).await {
+                Ok(_) => panic!("a closed document should reject every selection"),
+                Err(error) => error,
+            };
+            assert_eq!(error.to_string(), "document is closed");
+        }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn open_document_converts_supported_inputs() {
+        let document = parser()
+            .open_document(PdfInput::Path(
+                "../../integration_tests_data/receipt.png".into(),
+            ))
+            .await
+            .expect("a supported image should open through PDF conversion");
+
+        assert_eq!(document.page_count(), 1);
+        assert_eq!(document.parse().await.unwrap().total_pages, 1);
+        document.close();
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn form_parse_matches_one_shot_and_is_stable() {
+        let parser = LiteParse::new(LiteParseConfig {
+            ocr_enabled: false,
+            quiet: true,
+            extract_form_fields: true,
+            ..Default::default()
+        });
+        let expected = parser.parse(ACROFORM_PDF).await.unwrap();
+        let document = parser
+            .open_document(PdfInput::Path(ACROFORM_PDF.into()))
+            .await
+            .unwrap();
+        let first = document.parse().await.unwrap();
+        let second = document.parse().await.unwrap();
+
+        assert_eq!(first.text, expected.text);
+        assert_eq!(
+            serde_json::to_value(&first.pages).unwrap(),
+            serde_json::to_value(&expected.pages).unwrap()
+        );
+        assert_eq!(second.text, first.text);
+        assert_eq!(
+            serde_json::to_value(&second.pages).unwrap(),
+            serde_json::to_value(&first.pages).unwrap()
+        );
+        for expected in ["ACROFORM-CUSTOMER-7319", "2026-07-28", "NESTED-ONLY-VALUE"] {
+            assert_eq!(second.text.matches(expected).count(), 1);
+        }
+        document.close();
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn idle_document_releases_the_global_pdfium_lock() {
+        let idle = parser()
+            .open_document(PdfInput::Path(ACROFORM_PDF.into()))
+            .await
+            .unwrap();
+        let (sent, received) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            let opened =
+                runtime.block_on(parser().open_document(PdfInput::Path(SAMPLE_PDF.into())));
+            sent.send(opened).unwrap();
+        });
+        let unrelated = received
+            .recv_timeout(Duration::from_secs(5))
+            .expect("an idle retained document must not hold the PDFium lock")
+            .unwrap();
+        assert_eq!(unrelated.page_count(), 1);
+        unrelated.close();
+        idle.close();
+        worker.join().unwrap();
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn drop_closes_before_owned_bytes_are_released() {
+        {
+            let document = parser()
+                .open_document(PdfInput::Bytes(std::fs::read(SAMPLE_PDF).unwrap()))
+                .await
+                .unwrap();
+            assert!(!document.parse().await.unwrap().text.is_empty());
+        }
+
+        let next = parser()
+            .open_document(PdfInput::Path(SAMPLE_PDF.into()))
+            .await
+            .unwrap();
+        assert_eq!(next.page_count(), 1);
+        next.close();
+    }
+}

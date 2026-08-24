@@ -8,6 +8,25 @@ use types::{
     JsScreenshotResult, JsTextItem,
 };
 
+fn page_numbers_from_js(page_numbers: Vec<f64>) -> Result<Vec<u32>> {
+    page_numbers
+        .into_iter()
+        .map(|page_number| {
+            if page_number.is_finite()
+                && page_number.fract() == 0.0
+                && page_number >= 0.0
+                && page_number <= u32::MAX as f64
+            {
+                Ok(page_number as u32)
+            } else {
+                Err(Error::from_reason(format!(
+                    "page number must be a finite integer representable as u32: {page_number}"
+                )))
+            }
+        })
+        .collect()
+}
+
 /// Main LiteParse parser class.
 #[napi]
 pub struct LiteParse {
@@ -46,6 +65,46 @@ impl LiteParse {
             .map_err(|e| Error::from_reason(e.to_string()))?;
 
         Ok(JsParseResult::from_rust(&result, &self.config))
+    }
+
+    /// Parse an explicit set of 1-based pages from a document source.
+    #[napi]
+    pub async fn parse_source_pages(
+        &self,
+        input: Either<String, Buffer>,
+        page_numbers: Vec<f64>,
+    ) -> Result<JsParseResult> {
+        use liteparse::types::PdfInput;
+
+        let pdf_input = match input {
+            Either::A(path) => PdfInput::Path(path),
+            Either::B(buf) => PdfInput::Bytes(buf.to_vec()),
+        };
+        let page_numbers = page_numbers_from_js(page_numbers)?;
+        let result = self
+            .inner
+            .parse_pages_input(pdf_input, page_numbers)
+            .await
+            .map_err(|error| Error::from_reason(error.to_string()))?;
+        Ok(JsParseResult::from_rust(&result, &self.config))
+    }
+
+    /// Open a document for repeated page operations.
+    #[napi]
+    pub async fn open_document(&self, input: Either<String, Buffer>) -> Result<OpenDocument> {
+        let input = match input {
+            Either::A(path) => liteparse::types::PdfInput::Path(path),
+            Either::B(buf) => liteparse::types::PdfInput::Bytes(buf.to_vec()),
+        };
+        let document = self
+            .inner
+            .open_document(input)
+            .await
+            .map_err(|error| Error::from_reason(error.to_string()))?;
+        Ok(OpenDocument {
+            inner: std::sync::Arc::new(document),
+            config: self.config.clone(),
+        })
     }
 
     /// Open a document for bounded-memory batch parsing. Internal plumbing
@@ -168,6 +227,96 @@ impl LiteParse {
     #[napi(getter)]
     pub fn config(&self) -> JsLiteParseConfig {
         JsLiteParseConfig::from_rust(&self.config)
+    }
+}
+
+/// A document normalized to PDF and kept open for repeated page operations.
+#[napi]
+pub struct OpenDocument {
+    inner: std::sync::Arc<liteparse::OpenDocument>,
+    config: liteparse::config::LiteParseConfig,
+}
+
+#[napi]
+impl OpenDocument {
+    /// Total pages in the source document.
+    #[napi(getter)]
+    pub fn page_count(&self) -> u32 {
+        self.inner.page_count()
+    }
+
+    /// Parse the retained document.
+    #[napi]
+    pub async fn parse(&self) -> Result<JsParseResult> {
+        let result = self
+            .inner
+            .parse()
+            .await
+            .map_err(|error| Error::from_reason(error.to_string()))?;
+        Ok(JsParseResult::from_rust(&result, &self.config))
+    }
+
+    /// Parse an explicit set of 1-based source pages.
+    #[napi]
+    pub async fn parse_pages(&self, page_numbers: Vec<f64>) -> Result<JsParseResult> {
+        let page_numbers = page_numbers_from_js(page_numbers)?;
+        let result = self
+            .inner
+            .parse_pages(page_numbers)
+            .await
+            .map_err(|error| Error::from_reason(error.to_string()))?;
+        Ok(JsParseResult::from_rust(&result, &self.config))
+    }
+
+    /// Reopen the PDFium document while retaining the normalized PDF.
+    #[napi(ts_return_type = "Promise<void>")]
+    pub fn reopen(&self) -> AsyncTask<DocumentTask> {
+        AsyncTask::new(DocumentTask {
+            document: self.inner.clone(),
+            operation: DocumentOperation::Reopen,
+        })
+    }
+
+    /// Release the retained document. Idempotent.
+    #[napi(ts_return_type = "Promise<void>")]
+    pub fn close(&self) -> AsyncTask<DocumentTask> {
+        AsyncTask::new(DocumentTask {
+            document: self.inner.clone(),
+            operation: DocumentOperation::Close,
+        })
+    }
+}
+
+enum DocumentOperation {
+    Reopen,
+    Close,
+}
+
+pub struct DocumentTask {
+    document: std::sync::Arc<liteparse::OpenDocument>,
+    operation: DocumentOperation,
+}
+
+#[napi]
+impl Task for DocumentTask {
+    type Output = ();
+    type JsValue = ();
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        match self.operation {
+            DocumentOperation::Reopen => self
+                .document
+                .reopen()
+                .map_err(|error| Error::from_reason(error.to_string())),
+            DocumentOperation::Close => {
+                self.document.close();
+                Ok(())
+            }
+        }
+    }
+
+    fn resolve(&mut self, _env: Env, (): Self::Output) -> Result<Self::JsValue> {
+        Ok(())
     }
 }
 

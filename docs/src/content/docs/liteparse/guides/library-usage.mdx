@@ -104,6 +104,25 @@ const buffer = Buffer.from(await response.arrayBuffer());
 const result2 = await parser.parse(buffer);
 ```
 
+### Keeping a document open
+
+Open a document once when you need to parse several page selections. Supported
+office and image inputs are converted to a temporary PDF once. The temporary
+file remains alive until `close()` finishes.
+
+```typescript
+const parser = new LiteParse({ ocrEnabled: false });
+const document = await parser.openDocument("document.pdf");
+
+try {
+  console.log(document.pageCount);
+  const firstPages = await document.parsePages([1, 2]);
+  const laterPages = await document.parsePages([10, 11]);
+} finally {
+  await document.close();
+}
+```
+
 ### Screenshots
 
 Generate page images as buffers — useful for sending to LLMs or saving to disk:
@@ -198,6 +217,21 @@ result = parser.parse(pdf_bytes)
 print(result.text)
 ```
 
+### Keeping a document open
+
+Open a document once when you need to parse several page selections. Supported
+office and image inputs are converted to a temporary PDF once. The context
+manager closes the document and removes the temporary file when the block exits.
+
+```python
+parser = LiteParse(ocr_enabled=False)
+
+with parser.open_document("document.pdf") as document:
+    print(document.page_count)
+    first_pages = document.parse_pages([1, 2])
+    later_pages = document.parse_pages([10, 11])
+```
+
 ### Screenshots
 
 ```python
@@ -257,6 +291,28 @@ use liteparse::types::PdfInput;
 let parser = LiteParse::new(LiteParseConfig::default());
 let pdf_bytes = std::fs::read("document.pdf")?;
 let result = parser.parse_input(PdfInput::Bytes(pdf_bytes)).await?;
+```
+
+### Keeping a document open
+
+Open a document once when you need to parse several page selections. Native
+builds convert supported office and image inputs to a temporary PDF once. The
+temporary file remains alive until `close()` finishes. WASM accepts PDF bytes
+only.
+
+```rust
+use liteparse::types::PdfInput;
+use liteparse::{LiteParse, LiteParseConfig};
+
+let parser = LiteParse::new(LiteParseConfig::default());
+let document = parser
+    .open_document(PdfInput::Path("document.pdf".into()))
+    .await?;
+
+println!("{} pages", document.page_count());
+let first_pages = document.parse_pages([1, 2]).await?;
+let later_pages = document.parse_pages([10, 11]).await?;
+document.close();
 ```
 
 ### Configuration

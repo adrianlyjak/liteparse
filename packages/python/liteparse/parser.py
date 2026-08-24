@@ -1,7 +1,7 @@
 """LiteParse Python wrapper - native Rust bindings via PyO3."""
 
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple, Union, cast
 
 from liteparse._liteparse import LiteParse as _NativeLiteParse
 from liteparse._liteparse import search_items as _native_search_items
@@ -436,6 +436,54 @@ def _convert_native_result(native_result: Any) -> ParseResult:
     )
 
 
+_DOCUMENT_OPERATION_NAMES = frozenset({"parse", "parse_pages"})
+
+
+class OpenDocument:
+    """A document normalized to PDF and kept open for page operations."""
+
+    def __init__(self, native: Any):
+        self._native = native
+
+    @property
+    def page_count(self) -> int:
+        """Total pages in the source document."""
+        return cast(int, self._native.page_count)
+
+    def parse(self) -> ParseResult:
+        """Parse the retained document."""
+        try:
+            return _convert_native_result(self._native.parse())
+        except Exception as error:
+            raise ParseError(str(error)) from error
+
+    def parse_pages(self, page_numbers: Iterable[int]) -> ParseResult:
+        """Parse explicit 1-based source pages in source-document order."""
+        try:
+            return _convert_native_result(
+                self._native.parse_pages(list(page_numbers))
+            )
+        except Exception as error:
+            raise ParseError(str(error)) from error
+
+    def close(self) -> None:
+        """Release the retained document. Safe to call more than once."""
+        self._native.close()
+
+    def reopen(self) -> None:
+        """Release PDFium caches and reopen the normalized PDF."""
+        try:
+            self._native.reopen()
+        except Exception as error:
+            raise ParseError(str(error)) from error
+
+    def __enter__(self) -> "OpenDocument":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+
 class LiteParse:
     """
     Python wrapper for the LiteParse document parser.
@@ -569,7 +617,7 @@ class LiteParse:
             extract_vector_graphics: Expose page-scoped vector shapes and
                 merged horizontal/vertical line segments. Default False.
         """
-        kwargs = {}
+        kwargs: Dict[str, Any] = {}
         if ocr_enabled is not None:
             kwargs["ocr_enabled"] = ocr_enabled
         if ocr_server_url is not None:
@@ -647,6 +695,25 @@ class LiteParse:
 
         self._native = _NativeLiteParse(**kwargs)
 
+    def open_document(
+        self,
+        file_data: Union[str, Path, bytes],
+    ) -> OpenDocument:
+        """Open a document for repeated page operations."""
+        try:
+            if isinstance(file_data, bytes):
+                native = self._native.open_document_bytes(file_data)
+            else:
+                file_path = Path(file_data)
+                if not file_path.exists():
+                    raise FileNotFoundError(f"File not found: {file_path}")
+                native = self._native.open_document(str(file_path.absolute()))
+            return OpenDocument(native)
+        except FileNotFoundError:
+            raise
+        except Exception as error:
+            raise ParseError(str(error)) from error
+
     def parse(
         self,
         file_data: Union[str, Path, bytes],
@@ -677,6 +744,29 @@ class LiteParse:
             raise
         except Exception as e:
             raise ParseError(str(e)) from e
+
+    def parse_pages(
+        self,
+        file_data: Union[str, Path, bytes],
+        page_numbers: Iterable[int],
+    ) -> ParseResult:
+        """Parse explicit 1-based source pages in source-document order."""
+        try:
+            pages = list(page_numbers)
+            if isinstance(file_data, bytes):
+                native_result = self._native.parse_pages_bytes(file_data, pages)
+            else:
+                file_path = Path(file_data)
+                if not file_path.exists():
+                    raise FileNotFoundError(f"File not found: {file_path}")
+                native_result = self._native.parse_pages(
+                    str(file_path.absolute()), pages
+                )
+            return _convert_native_result(native_result)
+        except FileNotFoundError:
+            raise
+        except Exception as error:
+            raise ParseError(str(error)) from error
 
     def parse_batches(
         self,
