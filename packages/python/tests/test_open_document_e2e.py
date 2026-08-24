@@ -234,6 +234,11 @@ def test_open_document_raster_formats(parser: LiteParse, sample_pdf: Path) -> No
             PageRasterOptions(dpi=float("nan")),
             "raster dpi must be a positive finite number",
         ),
+        (
+            1,
+            PageRasterOptions(dpi=100_000),
+            "raster exceeds the 256 MiB pixel buffer limit",
+        ),
     ],
 )
 def test_raster_page_validation_matches_document_modes(

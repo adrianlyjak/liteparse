@@ -125,6 +125,7 @@ try {
     [4, {}, /page 4 out of range \(document has 3 pages\)/],
     [1, { dpi: 0 }, /raster dpi must be a positive finite number/],
     [1, { dpi: Number.NaN }, /raster dpi must be a positive finite number/],
+    [1, { dpi: 100_000 }, /raster exceeds the 256 MiB pixel buffer limit/],
   ]) {
     await assert.rejects(parser.rasterPage(fixture, pageNum, options), message);
     await assert.rejects(document.rasterPage(pageNum, options), message);

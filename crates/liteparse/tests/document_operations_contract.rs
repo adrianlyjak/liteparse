@@ -213,6 +213,14 @@ async fn raster_page_validation_matches_between_document_modes() {
             },
             "invalid config: raster dpi must be a positive finite number",
         ),
+        (
+            1,
+            PageRasterOptions {
+                dpi: 100_000.0,
+                ..Default::default()
+            },
+            "invalid config: raster exceeds the 256 MiB pixel buffer limit",
+        ),
     ] {
         let one_shot = parser
             .raster_page(input.clone(), page_num, options)

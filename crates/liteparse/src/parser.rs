@@ -1550,6 +1550,18 @@ impl LiteParse {
         }
         .transact(|transaction| raster_transaction(self, transaction, page_num, options))
     }
+
+    /// Render one 1-based page from a path or raw bytes to unencoded pixels.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn raster_page(
+        &self,
+        input: PdfInput,
+        page_num: u32,
+        options: PageRasterOptions,
+    ) -> Result<PageRaster, LiteParseError> {
+        self.raster_page_input(input, page_num, options).await
+    }
+
     pub fn config(&self) -> &LiteParseConfig {
         &self.config
     }
@@ -1645,7 +1657,7 @@ impl DocumentOperations for LiteParse {
         page_num: u32,
         options: PageRasterOptions,
     ) -> impl Future<Output = Result<PageRaster, LiteParseError>> + Send {
-        self.raster_page_input(input, page_num, options)
+        LiteParse::raster_page(self, input, page_num, options)
     }
 }
 
@@ -1735,6 +1747,7 @@ impl OpenDocument {
         options: PageRasterOptions,
     ) -> Result<PageRaster, LiteParseError> {
         self.transact(|transaction| {
+            transaction.resolved.ensure_renderable()?;
             raster_transaction(&self.parser, transaction, page_num, options)
         })
     }

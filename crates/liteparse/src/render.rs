@@ -4,6 +4,8 @@ use crate::types::{PdfInput, ScreenshotRect};
 use pdfium::Library;
 use serde::Serialize;
 
+const MAX_RASTER_BYTES: u64 = 256 * 1024 * 1024;
+
 /// A single rendered page as PNG bytes, plus raster-derived signals.
 #[derive(Debug, Clone)]
 pub struct RenderedPage {
@@ -32,7 +34,8 @@ pub enum RasterPixelFormat {
 /// Options for rendering one page to an unencoded pixel buffer.
 #[derive(Debug, Clone, Copy)]
 pub struct PageRasterOptions {
-    /// Render resolution in dots per inch.
+    /// Render resolution in dots per inch. The resulting pixel buffer may not
+    /// exceed 256 MiB.
     pub dpi: f32,
     /// Channel layout for the returned pixels.
     pub pixel_format: RasterPixelFormat,
@@ -88,14 +91,38 @@ pub(crate) fn render_page_raster(
         form.run_document_actions();
     }
     let page = document.page((page_num - 1) as i32)?;
+    let scale = f64::from(dpi) / 72.0;
+    let width = (f64::from(page.width()) * scale).round();
+    let height = (f64::from(page.height()) * scale).round();
+    let channels: u32 = match pixel_format {
+        RasterPixelFormat::Rgb8 => 3,
+        RasterPixelFormat::Rgbx8 => 4,
+    };
+    let raster_bytes = (width as u64)
+        .checked_mul(height as u64)
+        .and_then(|pixels| pixels.checked_mul(u64::from(channels)))
+        .ok_or_else(|| LiteParseError::Config("raster dimensions overflow".to_string()))?;
+    if !width.is_finite()
+        || !height.is_finite()
+        || width < 1.0
+        || height < 1.0
+        || width > f64::from(i32::MAX)
+        || height > f64::from(i32::MAX)
+        || raster_bytes > MAX_RASTER_BYTES
+    {
+        return Err(LiteParseError::Config(format!(
+            "raster exceeds the {} MiB pixel buffer limit",
+            MAX_RASTER_BYTES / (1024 * 1024)
+        )));
+    }
     let bitmap = page.render_with_form(dpi, form)?;
     let width = u32::try_from(bitmap.width())
         .map_err(|_| LiteParseError::Other("invalid raster width".to_string()))?;
     let height = u32::try_from(bitmap.height())
         .map_err(|_| LiteParseError::Other("invalid raster height".to_string()))?;
-    let (channels, pixels) = match pixel_format {
-        RasterPixelFormat::Rgb8 => (3, bitmap.to_rgb()),
-        RasterPixelFormat::Rgbx8 => (4, bitmap.to_rgbx()),
+    let pixels = match pixel_format {
+        RasterPixelFormat::Rgb8 => bitmap.to_rgb(),
+        RasterPixelFormat::Rgbx8 => bitmap.to_rgbx(),
     };
     let stride = width
         .checked_mul(channels)
