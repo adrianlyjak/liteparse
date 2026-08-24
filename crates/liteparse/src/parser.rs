@@ -1717,15 +1717,15 @@ impl DocumentOperations for OpenDocument {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn screenshot_pages<P>(
+    async fn screenshot_pages<P>(
         &self,
         (): (),
         page_numbers: P,
-    ) -> impl Future<Output = Result<Vec<ScreenshotResult>, LiteParseError>> + Send
+    ) -> Result<Vec<ScreenshotResult>, LiteParseError>
     where
         P: AsRef<[u32]> + Send,
     {
-        async move { OpenDocument::screenshot_pages(self, page_numbers) }
+        OpenDocument::screenshot_pages(self, page_numbers)
     }
 }
 

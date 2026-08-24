@@ -122,10 +122,8 @@ pub async fn resolve_pdf_input(
 ) -> Result<(crate::types::PdfInput, PdfInputGuard), LiteParseError> {
     use crate::types::PdfInput;
 
-    if reject_text_formats {
-        if let Some(extension) = text_only_input_extension(&input) {
-            return Err(screenshot_text_format_error(&extension));
-        }
+    if reject_text_formats && let Some(extension) = text_only_input_extension(&input) {
+        return Err(screenshot_text_format_error(&extension));
     }
 
     match input {
