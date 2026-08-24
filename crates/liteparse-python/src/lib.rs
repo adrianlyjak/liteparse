@@ -1952,6 +1952,48 @@ impl LiteParse {
         self.render_selected_pages(py, PdfInput::Bytes(data), page_numbers)
     }
 
+    /// Render one 1-based source page from a document path to raw pixels.
+    #[pyo3(signature = (input, page_num, *, dpi = 150.0, pixel_format = "rgb8", render_form_fields = false))]
+    fn raster_page(
+        &self,
+        py: Python<'_>,
+        input: String,
+        page_num: u32,
+        dpi: f32,
+        pixel_format: &str,
+        render_form_fields: bool,
+    ) -> PyResult<PyPageRaster> {
+        self.render_raster_page(
+            py,
+            PdfInput::Path(input),
+            page_num,
+            dpi,
+            pixel_format,
+            render_form_fields,
+        )
+    }
+
+    /// Render one 1-based source page from raw document bytes to raw pixels.
+    #[pyo3(signature = (data, page_num, *, dpi = 150.0, pixel_format = "rgb8", render_form_fields = false))]
+    fn raster_page_bytes(
+        &self,
+        py: Python<'_>,
+        data: Vec<u8>,
+        page_num: u32,
+        dpi: f32,
+        pixel_format: &str,
+        render_form_fields: bool,
+    ) -> PyResult<PyPageRaster> {
+        self.render_raster_page(
+            py,
+            PdfInput::Bytes(data),
+            page_num,
+            dpi,
+            pixel_format,
+            render_form_fields,
+        )
+    }
+
     /// Get the resolved configuration.
     #[getter]
     fn config(&self) -> PyLiteParseConfig {
@@ -1967,6 +2009,42 @@ impl LiteParse {
 }
 
 impl LiteParse {
+    fn render_raster_page(
+        &self,
+        py: Python<'_>,
+        input: PdfInput,
+        page_num: u32,
+        dpi: f32,
+        pixel_format: &str,
+        render_form_fields: bool,
+    ) -> PyResult<PyPageRaster> {
+        let pixel_format = match pixel_format {
+            "rgb8" => liteparse::RasterPixelFormat::Rgb8,
+            "rgbx8" => liteparse::RasterPixelFormat::Rgbx8,
+            value => {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "unsupported raster pixel format: {value}"
+                )));
+            }
+        };
+        py.detach(|| {
+            self.runtime
+                .block_on(self.inner.raster_page_input(
+                    input,
+                    page_num,
+                    liteparse::PageRasterOptions {
+                        dpi,
+                        pixel_format,
+                        render_form_fields,
+                    },
+                ))
+                .map(PyPageRaster::from)
+                .map_err(|error| {
+                    PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(error.to_string())
+                })
+        })
+    }
+
     fn parse_selected_pages(
         &self,
         py: Python<'_>,

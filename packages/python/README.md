@@ -120,12 +120,17 @@ Open a document once when you need to parse or render several page selections.
 Supported non-PDF inputs are converted to a temporary PDF once:
 
 ```python
-from liteparse import LiteParse
+from liteparse import LiteParse, PageRasterOptions
 
 parser = LiteParse(ocr_enabled=False)
 with parser.open_document("document.pdf") as document:
     print(document.page_count)
     result = document.parse_pages([1, 2])
+    raster = document.raster_page(
+        1,
+        PageRasterOptions(dpi=150, pixel_format="rgb8"),
+    )
+    print(raster.width, raster.height, raster.stride)
     for screenshot in document.screenshot_pages([1, 2]):
         with open(f"page_{screenshot.page_num}.png", "wb") as output:
             output.write(screenshot.image_bytes)
@@ -148,6 +153,32 @@ for s in screenshots:
 
 The existing `screenshot(file_path, page_numbers=...)` method remains
 available and renders every page when `page_numbers` is omitted.
+
+## Raw Page Rasters
+
+Render one page to owned, unencoded `rgb8` or `rgbx8` pixels. Use the one-shot
+form for a single render, or `document.raster_page()` when reusing an open
+document:
+
+```python
+from liteparse import PageRasterOptions
+
+raster = parser.raster_page(
+    "document.pdf",
+    1,
+    PageRasterOptions(
+        dpi=150,
+        pixel_format="rgbx8",
+        render_form_fields=True,
+    ),
+)
+
+print(raster.width, raster.height, raster.stride, raster.pixel_format)
+# raster.pixels is tightly packed bytes suitable for a raw image encoder.
+```
+
+`rgb8` uses three bytes per pixel. `rgbx8` uses four bytes per pixel, with an
+opaque padding byte rather than an alpha channel.
 
 ## Document Complexity
 

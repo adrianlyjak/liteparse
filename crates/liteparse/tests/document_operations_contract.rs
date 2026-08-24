@@ -1,5 +1,8 @@
 use liteparse::types::PdfInput;
-use liteparse::{DocumentOperations, LiteParse, LiteParseConfig, OpenDocument};
+use liteparse::{
+    DocumentOperations, LiteParse, LiteParseConfig, OpenDocument, PageRaster, PageRasterOptions,
+    RasterPixelFormat,
+};
 use serial_test::serial;
 
 const ACROFORM_PDF: &str = "../../integration_tests_data/filled_acroform.pdf";
@@ -26,6 +29,15 @@ fn assert_document_operations<T, Input>()
 where
     T: DocumentOperations<Input = Input>,
 {
+}
+
+fn assert_same_raster(one_shot: &PageRaster, retained: &PageRaster) {
+    assert_eq!(one_shot.page_num, retained.page_num);
+    assert_eq!(one_shot.width, retained.width);
+    assert_eq!(one_shot.height, retained.height);
+    assert_eq!(one_shot.stride, retained.stride);
+    assert_eq!(one_shot.pixel_format, retained.pixel_format);
+    assert_eq!(one_shot.pixels, retained.pixels);
 }
 
 #[test]
@@ -105,6 +117,114 @@ async fn trait_calls_preserve_natural_source_arity() {
             .map(|page| page.image_bytes.as_slice())
             .collect::<Vec<_>>()
     );
+
+    let options = PageRasterOptions {
+        dpi: 96.0,
+        pixel_format: RasterPixelFormat::Rgbx8,
+        render_form_fields: true,
+    };
+    let one_shot =
+        DocumentOperations::raster_page(&parser, PdfInput::Path(ACROFORM_PDF.into()), 2, options)
+            .await
+            .unwrap();
+    let retained = DocumentOperations::raster_page(&document, (), 2, options)
+        .await
+        .unwrap();
+
+    assert_same_raster(&one_shot, &retained);
+}
+
+#[tokio::test]
+#[serial]
+async fn raster_page_matches_between_one_shot_path_and_retained_document() {
+    let parser = screenshot_parser();
+    let input = PdfInput::Path(ACROFORM_PDF.into());
+    let options = PageRasterOptions {
+        dpi: 72.0,
+        pixel_format: RasterPixelFormat::Rgb8,
+        render_form_fields: true,
+    };
+
+    let one_shot = parser.raster_page(input.clone(), 1, options).await.unwrap();
+    let retained = parser
+        .open_document(input)
+        .await
+        .unwrap()
+        .raster_page(1, options)
+        .unwrap();
+
+    assert_same_raster(&one_shot, &retained);
+}
+
+#[tokio::test]
+#[serial]
+async fn raster_page_accepts_pdf_bytes_and_matches_retained_document() {
+    let parser = screenshot_parser();
+    let bytes = std::fs::read(ACROFORM_PDF).unwrap();
+    let input = PdfInput::Bytes(bytes);
+    let options = PageRasterOptions {
+        dpi: 36.0,
+        pixel_format: RasterPixelFormat::Rgbx8,
+        render_form_fields: true,
+    };
+
+    let one_shot = parser.raster_page(input.clone(), 3, options).await.unwrap();
+    let retained = parser
+        .open_document(input)
+        .await
+        .unwrap()
+        .raster_page(3, options)
+        .unwrap();
+
+    assert_same_raster(&one_shot, &retained);
+}
+
+#[tokio::test]
+#[serial]
+async fn raster_page_validation_matches_between_document_modes() {
+    let parser = screenshot_parser();
+    let input = PdfInput::Path(ACROFORM_PDF.into());
+    let document = parser.open_document(input.clone()).await.unwrap();
+
+    for (page_num, options, expected) in [
+        (
+            0,
+            PageRasterOptions::default(),
+            "page 0 out of range (document has 3 pages)",
+        ),
+        (
+            4,
+            PageRasterOptions::default(),
+            "page 4 out of range (document has 3 pages)",
+        ),
+        (
+            1,
+            PageRasterOptions {
+                dpi: 0.0,
+                ..Default::default()
+            },
+            "invalid config: raster dpi must be a positive finite number",
+        ),
+        (
+            1,
+            PageRasterOptions {
+                dpi: f32::NAN,
+                ..Default::default()
+            },
+            "invalid config: raster dpi must be a positive finite number",
+        ),
+    ] {
+        let one_shot = parser
+            .raster_page(input.clone(), page_num, options)
+            .await
+            .expect_err("invalid one-shot raster arguments should fail");
+        let retained = document
+            .raster_page(page_num, options)
+            .expect_err("invalid retained raster arguments should fail");
+
+        assert_eq!(one_shot.to_string(), expected);
+        assert_eq!(one_shot.to_string(), retained.to_string());
+    }
 }
 
 #[tokio::test]

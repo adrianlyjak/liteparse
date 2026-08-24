@@ -329,14 +329,14 @@ export interface NativeDocumentOperations {
   parse(): Promise<NativeParseResult>;
   parsePages(pageNumbers: number[]): Promise<NativeParseResult>;
   screenshotPages(pageNumbers: number[]): Promise<NativeScreenshotResult[]>;
-}
-
-export interface NativeOpenDocument extends NativeDocumentOperations {
-  readonly pageCount: number;
   rasterPage(
     pageNum: number,
     options?: NativePageRasterOptions,
   ): Promise<NativePageRaster>;
+}
+
+export interface NativeOpenDocument extends NativeDocumentOperations {
+  readonly pageCount: number;
   reopen(): Promise<void>;
   close(): Promise<void>;
 }
@@ -411,6 +411,11 @@ export interface LiteParseNative {
     input: string | Buffer,
     pageNumbers: number[],
   ): Promise<NativeScreenshotResult[]>;
+  rasterPage(
+    input: string | Buffer,
+    pageNum: number,
+    options?: NativePageRasterOptions,
+  ): Promise<NativePageRaster>;
   format(result: NativeParseResult): string;
   readonly config: LiteParseNativeConfig;
 }

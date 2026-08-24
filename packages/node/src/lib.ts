@@ -510,6 +510,13 @@ export interface DocumentOperations<SourceArgs extends unknown[]> {
   screenshotPages(
     ...args: [...SourceArgs, pageNumbers: readonly number[]]
   ): Promise<ScreenshotResult[]>;
+  rasterPage(
+    ...args: [
+      ...SourceArgs,
+      pageNum: number,
+      options?: PageRasterOptions,
+    ]
+  ): Promise<PageRaster>;
 }
 
 export type RasterPixelFormat = "rgb8" | "rgbx8";
@@ -920,6 +927,17 @@ export class LiteParse implements DocumentOperations<[input: LiteParseInput]> {
       Array.from(pageNumbers),
     );
     return results.map(toScreenshot);
+  }
+
+  /** Render one 1-based source page to unencoded, tightly packed pixels. */
+  async rasterPage(
+    input: LiteParseInput,
+    pageNum: number,
+    options: PageRasterOptions = {},
+  ): Promise<PageRaster> {
+    const nativeInput =
+      typeof input === "string" ? input : Buffer.from(input);
+    return this._native.rasterPage(nativeInput, pageNum, options);
   }
 
   getConfig(): LiteParseConfig {

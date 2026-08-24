@@ -305,6 +305,15 @@ pub trait DocumentOperations: Sync {
     ) -> impl Future<Output = Result<Vec<ScreenshotResult>, LiteParseError>> + Send
     where
         P: AsRef<[u32]> + Send;
+
+    /// Render one 1-based page to an owned, unencoded pixel buffer.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn raster_page(
+        &self,
+        input: Self::Input,
+        page_num: u32,
+        options: PageRasterOptions,
+    ) -> impl Future<Output = Result<PageRaster, LiteParseError>> + Send;
 }
 
 fn normalize_page_numbers<P>(
@@ -1527,6 +1536,20 @@ impl LiteParse {
         self.screenshot_pages_input(input, page_numbers).await
     }
 
+    /// Render one 1-based page from a file path or raw bytes to unencoded pixels.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn raster_page_input(
+        &self,
+        input: PdfInput,
+        page_num: u32,
+        options: PageRasterOptions,
+    ) -> Result<PageRaster, LiteParseError> {
+        let resolved = self.resolve_renderable_input(input).await?;
+        ReopeningDocumentAccess {
+            resolved: &resolved,
+        }
+        .transact(|transaction| raster_transaction(self, transaction, page_num, options))
+    }
     pub fn config(&self) -> &LiteParseConfig {
         &self.config
     }
@@ -1613,6 +1636,16 @@ impl DocumentOperations for LiteParse {
         P: AsRef<[u32]> + Send,
     {
         LiteParse::screenshot_pages(self, input, page_numbers)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn raster_page(
+        &self,
+        input: Self::Input,
+        page_num: u32,
+        options: PageRasterOptions,
+    ) -> impl Future<Output = Result<PageRaster, LiteParseError>> + Send {
+        self.raster_page_input(input, page_num, options)
     }
 }
 
@@ -1769,6 +1802,16 @@ impl DocumentOperations for OpenDocument {
         P: AsRef<[u32]> + Send,
     {
         OpenDocument::screenshot_pages(self, page_numbers)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn raster_page(
+        &self,
+        (): (),
+        page_num: u32,
+        options: PageRasterOptions,
+    ) -> impl Future<Output = Result<PageRaster, LiteParseError>> + Send {
+        async move { OpenDocument::raster_page(self, page_num, options) }
     }
 }
 

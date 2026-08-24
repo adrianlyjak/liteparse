@@ -230,6 +230,29 @@ impl LiteParse {
         Ok(results.into_iter().map(JsScreenshotResult::from).collect())
     }
 
+    /// Render one 1-based source page to an owned, unencoded pixel buffer.
+    #[napi]
+    pub async fn raster_page(
+        &self,
+        input: Either<String, Buffer>,
+        page_num: f64,
+        options: Option<JsPageRasterOptions>,
+    ) -> Result<JsPageRaster> {
+        use liteparse::types::PdfInput;
+
+        let pdf_input = match input {
+            Either::A(path) => PdfInput::Path(path),
+            Either::B(buf) => PdfInput::Bytes(buf.to_vec()),
+        };
+        let page_num = page_number_from_js(page_num)?;
+        let raster = self
+            .inner
+            .raster_page_input(pdf_input, page_num, options.unwrap_or_default().into_rust())
+            .await
+            .map_err(|error| Error::from_reason(error.to_string()))?;
+        Ok(JsPageRaster::from_rust(raster))
+    }
+
     /// Get the current configuration.
     #[napi(getter)]
     pub fn config(&self) -> JsLiteParseConfig {

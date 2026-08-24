@@ -24,11 +24,9 @@ export interface JsPageRasterOptions {
 }
 /** One rendered page as owned, tightly packed pixels. */
 export interface JsPageRaster {
-  /** 1-based source page number. */
   pageNum: number
   width: number
   height: number
-  /** Bytes between adjacent rows. */
   stride: number
   pixelFormat: JsRasterPixelFormat
   /** Pixel bytes in the declared channel layout. */
@@ -640,6 +638,8 @@ export declare class LiteParse {
   screenshot(input: string | Buffer, pageNumbers?: Array<number> | undefined | null): Promise<Array<JsScreenshotResult>>
   /** Render explicit 1-based source pages as PNG screenshots. */
   screenshotPages(input: string | Buffer, pageNumbers: Array<number>): Promise<Array<JsScreenshotResult>>
+  /** Render one 1-based source page to an owned, unencoded pixel buffer. */
+  rasterPage(input: string | Buffer, pageNum: number, options?: JsPageRasterOptions | undefined | null): Promise<JsPageRaster>
   /** Get the current configuration. */
   get config(): JsLiteParseConfig
 }
