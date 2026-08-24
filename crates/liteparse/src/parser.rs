@@ -12,6 +12,7 @@ use crate::ocr_merge;
 use crate::output::markdown;
 use crate::projection;
 use crate::render;
+use crate::render::{PageRaster, PageRasterOptions};
 use crate::types::{
     DocumentMetadata, ExtractedImage, OutlineTarget, Page, PageError, ParsedPage, PdfInput,
     ScreenshotRect, XfaPacket,
@@ -304,6 +305,15 @@ pub trait DocumentOperations: Sync {
     ) -> impl Future<Output = Result<Vec<ScreenshotResult>, LiteParseError>> + Send
     where
         P: AsRef<[u32]> + Send;
+
+    /// Render one 1-based page to an owned, unencoded pixel buffer.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn raster_page(
+        &self,
+        input: Self::Input,
+        page_num: u32,
+        options: PageRasterOptions,
+    ) -> impl Future<Output = Result<PageRaster, LiteParseError>> + Send;
 }
 
 fn normalize_page_numbers<P>(
@@ -598,6 +608,37 @@ fn validate_screenshot_page_numbers(
         }
     }
     Ok(())
+}
+
+fn raster_transaction(
+    parser: &LiteParse,
+    transaction: PdfTransaction<'_>,
+    page_num: u32,
+    options: PageRasterOptions,
+) -> Result<PageRaster, LiteParseError> {
+    with_render_document(
+        parser,
+        transaction,
+        options.render_form_fields,
+        |document| {
+            let form = if options.render_form_fields && document.form_type() != 0 {
+                Some(
+                    document
+                        .form_environment()
+                        .ok_or(pdfium::PdfiumError::OperationFailed)?,
+                )
+            } else {
+                None
+            };
+            render::render_page_raster(
+                document,
+                form.as_ref(),
+                page_num,
+                options.dpi,
+                options.pixel_format,
+            )
+        },
+    )
 }
 
 fn extract_loaded_document(
@@ -1495,6 +1536,32 @@ impl LiteParse {
         self.screenshot_pages_input(input, page_numbers).await
     }
 
+    /// Render one 1-based page from a file path or raw bytes to unencoded pixels.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn raster_page_input(
+        &self,
+        input: PdfInput,
+        page_num: u32,
+        options: PageRasterOptions,
+    ) -> Result<PageRaster, LiteParseError> {
+        let resolved = self.resolve_renderable_input(input).await?;
+        ReopeningDocumentAccess {
+            resolved: &resolved,
+        }
+        .transact(|transaction| raster_transaction(self, transaction, page_num, options))
+    }
+
+    /// Render one 1-based page from a path or raw bytes to unencoded pixels.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn raster_page(
+        &self,
+        input: PdfInput,
+        page_num: u32,
+        options: PageRasterOptions,
+    ) -> Result<PageRaster, LiteParseError> {
+        self.raster_page_input(input, page_num, options).await
+    }
+
     pub fn config(&self) -> &LiteParseConfig {
         &self.config
     }
@@ -1582,6 +1649,16 @@ impl DocumentOperations for LiteParse {
     {
         LiteParse::screenshot_pages(self, input, page_numbers)
     }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn raster_page(
+        &self,
+        input: Self::Input,
+        page_num: u32,
+        options: PageRasterOptions,
+    ) -> impl Future<Output = Result<PageRaster, LiteParseError>> + Send {
+        LiteParse::raster_page(self, input, page_num, options)
+    }
 }
 
 impl OpenDocument {
@@ -1663,6 +1740,18 @@ impl OpenDocument {
         })
     }
 
+    /// Render one 1-based page to an owned, unencoded pixel buffer.
+    pub fn raster_page(
+        &self,
+        page_num: u32,
+        options: PageRasterOptions,
+    ) -> Result<PageRaster, LiteParseError> {
+        self.transact(|transaction| {
+            transaction.resolved.ensure_renderable()?;
+            raster_transaction(&self.parser, transaction, page_num, options)
+        })
+    }
+
     /// Reopen the PDFium document while retaining the normalized PDF.
     ///
     /// This releases document-level PDFium caches without repeating input
@@ -1726,6 +1815,16 @@ impl DocumentOperations for OpenDocument {
         P: AsRef<[u32]> + Send,
     {
         OpenDocument::screenshot_pages(self, page_numbers)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    async fn raster_page(
+        &self,
+        (): (),
+        page_num: u32,
+        options: PageRasterOptions,
+    ) -> Result<PageRaster, LiteParseError> {
+        OpenDocument::raster_page(self, page_num, options)
     }
 }
 
@@ -2133,7 +2232,10 @@ mod tests {
         closed_rx.recv_timeout(Duration::from_secs(5)).unwrap();
         closing.join().unwrap();
         assert_eq!(
-            document.transact(|_| Ok(())).unwrap_err().to_string(),
+            document
+                .raster_page(1, PageRasterOptions::default())
+                .unwrap_err()
+                .to_string(),
             "document is closed"
         );
     }
@@ -2152,6 +2254,11 @@ mod tests {
         .unwrap();
 
         assert!(document.outline.get().is_none());
+        document
+            .raster_page(1, PageRasterOptions::default())
+            .unwrap();
+        assert!(document.outline.get().is_none());
+
         document.parse().await.unwrap();
         assert!(document.outline.get().is_some());
     }

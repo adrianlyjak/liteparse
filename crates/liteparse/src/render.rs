@@ -4,6 +4,8 @@ use crate::types::{PdfInput, ScreenshotRect};
 use pdfium::Library;
 use serde::Serialize;
 
+const MAX_RASTER_BYTES: u64 = 256 * 1024 * 1024;
+
 /// A single rendered page as PNG bytes, plus raster-derived signals.
 #[derive(Debug, Clone)]
 pub struct RenderedPage {
@@ -17,6 +19,133 @@ pub struct RenderedPage {
     /// Empty unless rect detection was requested; also empty for
     /// solid-fill pages, where detection is skipped.
     pub rects: Vec<ScreenshotRect>,
+}
+
+/// Channel layout for an unencoded page raster.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RasterPixelFormat {
+    /// Three tightly packed bytes per pixel: red, green, blue.
+    Rgb8,
+    /// Four tightly packed bytes per pixel: red, green, blue, opaque padding.
+    /// The fourth byte is not an alpha channel.
+    Rgbx8,
+}
+
+/// Options for rendering one page to an unencoded pixel buffer.
+#[derive(Debug, Clone, Copy)]
+pub struct PageRasterOptions {
+    /// Render resolution in dots per inch. The resulting pixel buffer may not
+    /// exceed 256 MiB.
+    pub dpi: f32,
+    /// Channel layout for the returned pixels.
+    pub pixel_format: RasterPixelFormat,
+    /// Draw AcroForm field appearances into the raster.
+    pub render_form_fields: bool,
+}
+
+impl Default for PageRasterOptions {
+    fn default() -> Self {
+        Self {
+            dpi: 150.0,
+            pixel_format: RasterPixelFormat::Rgb8,
+            render_form_fields: false,
+        }
+    }
+}
+
+/// One rendered page as owned, tightly packed pixels.
+#[derive(Debug, Clone)]
+pub struct PageRaster {
+    /// 1-based source page number.
+    pub page_num: u32,
+    pub width: u32,
+    pub height: u32,
+    /// Bytes between adjacent rows.
+    pub stride: u32,
+    pub pixel_format: RasterPixelFormat,
+    pub pixels: Vec<u8>,
+}
+
+/// Render one page from an open document into an owned pixel buffer.
+pub(crate) fn render_page_raster(
+    document: &pdfium::Document,
+    form: Option<&pdfium::FormEnvironment<'_, '_>>,
+    page_num: u32,
+    dpi: f32,
+    pixel_format: RasterPixelFormat,
+) -> Result<PageRaster, LiteParseError> {
+    if !dpi.is_finite() || dpi <= 0.0 {
+        return Err(LiteParseError::Config(
+            "raster dpi must be a positive finite number".to_string(),
+        ));
+    }
+
+    let page_count = document.page_count().max(0) as u32;
+    if page_num == 0 || page_num > page_count {
+        return Err(LiteParseError::Other(format!(
+            "page {page_num} out of range (document has {page_count} pages)"
+        )));
+    }
+
+    if let Some(form) = form {
+        form.run_document_actions();
+    }
+    let page = document.page((page_num - 1) as i32)?;
+    let scale = f64::from(dpi) / 72.0;
+    let width = (f64::from(page.width()) * scale).round();
+    let height = (f64::from(page.height()) * scale).round();
+    let channels: u32 = match pixel_format {
+        RasterPixelFormat::Rgb8 => 3,
+        RasterPixelFormat::Rgbx8 => 4,
+    };
+    let raster_bytes = (width as u64)
+        .checked_mul(height as u64)
+        .and_then(|pixels| pixels.checked_mul(u64::from(channels)))
+        .ok_or_else(|| LiteParseError::Config("raster dimensions overflow".to_string()))?;
+    if !width.is_finite()
+        || !height.is_finite()
+        || width < 1.0
+        || height < 1.0
+        || width > f64::from(i32::MAX)
+        || height > f64::from(i32::MAX)
+        || raster_bytes > MAX_RASTER_BYTES
+    {
+        return Err(LiteParseError::Config(format!(
+            "raster exceeds the {} MiB pixel buffer limit",
+            MAX_RASTER_BYTES / (1024 * 1024)
+        )));
+    }
+    let bitmap = page.render_with_form(dpi, form)?;
+    let width = u32::try_from(bitmap.width())
+        .map_err(|_| LiteParseError::Other("invalid raster width".to_string()))?;
+    let height = u32::try_from(bitmap.height())
+        .map_err(|_| LiteParseError::Other("invalid raster height".to_string()))?;
+    let pixels = match pixel_format {
+        RasterPixelFormat::Rgb8 => bitmap.to_rgb(),
+        RasterPixelFormat::Rgbx8 => bitmap.to_rgbx(),
+    };
+    let stride = width
+        .checked_mul(channels)
+        .ok_or_else(|| LiteParseError::Other("raster stride overflow".to_string()))?;
+    let expected_len = usize::try_from(stride)
+        .ok()
+        .and_then(|stride| stride.checked_mul(height as usize))
+        .ok_or_else(|| LiteParseError::Other("raster size overflow".to_string()))?;
+    if pixels.len() != expected_len {
+        return Err(LiteParseError::Other(format!(
+            "invalid raster length: expected {expected_len}, got {}",
+            pixels.len()
+        )));
+    }
+
+    Ok(PageRaster {
+        page_num,
+        width,
+        height,
+        stride,
+        pixel_format,
+        pixels,
+    })
 }
 
 /// Render selected pages from a PDF input to PNG bytes.

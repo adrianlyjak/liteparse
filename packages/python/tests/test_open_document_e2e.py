@@ -1,10 +1,15 @@
-"""Retained PDF Python API coverage."""
+"""Retained PDF and raw raster Python API coverage."""
 
 from pathlib import Path
 
 import pytest
 
-from liteparse import LiteParse, OpenDocument, ParseError
+from liteparse import (
+    LiteParse,
+    OpenDocument,
+    PageRasterOptions,
+    ParseError,
+)
 from liteparse.parser import _DOCUMENT_OPERATION_NAMES
 
 
@@ -46,6 +51,7 @@ def test_document_operation_names_match_both_public_classes() -> None:
     assert _DOCUMENT_OPERATION_NAMES == {
         "parse",
         "parse_pages",
+        "raster_page",
         "screenshot_pages",
     }
     assert _DOCUMENT_OPERATION_NAMES <= set(vars(LiteParse))
@@ -176,3 +182,81 @@ def test_screenshot_pages_rejects_closed_document(
 
     with pytest.raises(ParseError, match="document is closed"):
         document.screenshot_pages([1])
+
+
+@pytest.mark.parametrize("as_bytes", [False, True], ids=["path", "bytes"])
+def test_raster_page_matches_one_shot_for_path_and_bytes(
+    parser: LiteParse, sample_pdf: Path, as_bytes: bool
+) -> None:
+    source: Path | bytes = sample_pdf.read_bytes() if as_bytes else sample_pdf
+    options = PageRasterOptions(
+        dpi=36,
+        pixel_format="rgbx8",
+        render_form_fields=True,
+    )
+    expected = parser.raster_page(source, 1, options)
+
+    with parser.open_document(source) as document:
+        actual = document.raster_page(1, options)
+
+    assert actual.page_num == expected.page_num
+    assert actual.width == expected.width
+    assert actual.height == expected.height
+    assert actual.stride == expected.stride
+    assert actual.pixel_format == expected.pixel_format
+    assert actual.pixels == expected.pixels
+
+
+def test_open_document_raster_formats(parser: LiteParse, sample_pdf: Path) -> None:
+    with parser.open_document(sample_pdf) as document:
+        rgb = document.raster_page(1, PageRasterOptions(dpi=36, pixel_format="rgb8"))
+        rgbx = document.raster_page(1, PageRasterOptions(dpi=36, pixel_format="rgbx8"))
+
+    assert (rgb.width, rgb.height) == (rgbx.width, rgbx.height)
+    assert rgb.stride == rgb.width * 3
+    assert rgbx.stride == rgbx.width * 4
+    assert len(rgb.pixels) == rgb.stride * rgb.height
+    assert len(rgbx.pixels) == rgbx.stride * rgbx.height
+
+
+@pytest.mark.parametrize(
+    ("page_num", "options", "message"),
+    [
+        (0, PageRasterOptions(), r"page 0 out of range \(document has 1 pages\)"),
+        (2, PageRasterOptions(), r"page 2 out of range \(document has 1 pages\)"),
+        (
+            1,
+            PageRasterOptions(dpi=0),
+            "raster dpi must be a positive finite number",
+        ),
+        (
+            1,
+            PageRasterOptions(dpi=float("nan")),
+            "raster dpi must be a positive finite number",
+        ),
+    ],
+)
+def test_raster_page_validation_matches_document_modes(
+    parser: LiteParse,
+    sample_pdf: Path,
+    page_num: int,
+    options: PageRasterOptions,
+    message: str,
+) -> None:
+    with pytest.raises(ParseError, match=message) as one_shot:
+        parser.raster_page(sample_pdf, page_num, options)
+
+    with parser.open_document(sample_pdf) as document:
+        with pytest.raises(ParseError, match=message) as retained:
+            document.raster_page(page_num, options)
+
+    assert str(one_shot.value) == str(retained.value)
+
+
+def test_closed_document_rejects_work(parser: LiteParse, sample_pdf: Path) -> None:
+    document = parser.open_document(sample_pdf)
+    document.close()
+    document.close()
+
+    with pytest.raises(ParseError, match="document is closed"):
+        document.raster_page(1)

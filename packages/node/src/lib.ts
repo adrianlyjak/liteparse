@@ -510,6 +510,36 @@ export interface DocumentOperations<SourceArgs extends unknown[]> {
   screenshotPages(
     ...args: [...SourceArgs, pageNumbers: readonly number[]]
   ): Promise<ScreenshotResult[]>;
+  rasterPage(
+    ...args: [
+      ...SourceArgs,
+      pageNum: number,
+      options?: PageRasterOptions,
+    ]
+  ): Promise<PageRaster>;
+}
+
+export type RasterPixelFormat = "rgb8" | "rgbx8";
+
+export interface PageRasterOptions {
+  /** Render resolution. Defaults to 150. */
+  dpi?: number;
+  /** Pixel layout. Defaults to `rgb8`. */
+  pixelFormat?: RasterPixelFormat;
+  /** Draw AcroForm field appearances. Defaults to false. */
+  renderFormFields?: boolean;
+}
+
+export interface PageRaster {
+  /** 1-based source page number. */
+  pageNum: number;
+  width: number;
+  height: number;
+  /** Bytes between adjacent rows. */
+  stride: number;
+  pixelFormat: RasterPixelFormat;
+  /** Pixel bytes in the declared channel layout. */
+  pixels: Buffer;
 }
 
 /** A document normalized to PDF and kept open for repeated page operations. */
@@ -535,6 +565,14 @@ export class OpenDocument implements DocumentOperations<[]> {
   ): Promise<ScreenshotResult[]> {
     const results = await this._native.screenshotPages(Array.from(pageNumbers));
     return results.map(toScreenshot);
+  }
+
+  /** Render one 1-based page to unencoded, tightly packed pixels. */
+  async rasterPage(
+    pageNum: number,
+    options: PageRasterOptions = {},
+  ): Promise<PageRaster> {
+    return this._native.rasterPage(pageNum, options);
   }
 
   /** Release PDFium caches and reopen the normalized PDF. */
@@ -889,6 +927,17 @@ export class LiteParse implements DocumentOperations<[input: LiteParseInput]> {
       Array.from(pageNumbers),
     );
     return results.map(toScreenshot);
+  }
+
+  /** Render one 1-based source page to unencoded, tightly packed pixels. */
+  async rasterPage(
+    input: LiteParseInput,
+    pageNum: number,
+    options: PageRasterOptions = {},
+  ): Promise<PageRaster> {
+    const nativeInput =
+      typeof input === "string" ? input : Buffer.from(input);
+    return this._native.rasterPage(nativeInput, pageNum, options);
   }
 
   getConfig(): LiteParseConfig {

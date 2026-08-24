@@ -23,6 +23,9 @@ from .types import (
     ParseBatch,
     ParseError,
     PageError,
+    PageRaster,
+    PageRasterOptions,
+    RasterPixelFormat,
     ParseResult,
     DocumentMetadata,
     ScreenshotRect,
@@ -441,7 +444,7 @@ def _convert_native_result(native_result: Any) -> ParseResult:
 
 
 _DOCUMENT_OPERATION_NAMES = frozenset(
-    {"parse", "parse_pages", "screenshot_pages"}
+    {"parse", "parse_pages", "raster_page", "screenshot_pages"}
 )
 
 
@@ -483,6 +486,31 @@ class OpenDocument:
             ]
         except Exception as error:
             raise ParseError(str(error)) from error
+
+    def raster_page(
+        self,
+        page_num: int,
+        options: Optional[PageRasterOptions] = None,
+    ) -> PageRaster:
+        """Render one 1-based page to unencoded, tightly packed pixels."""
+        options = options or PageRasterOptions()
+        try:
+            raster = self._native.raster_page(
+                page_num,
+                dpi=options.dpi,
+                pixel_format=options.pixel_format,
+                render_form_fields=options.render_form_fields,
+            )
+        except Exception as error:
+            raise ParseError(str(error)) from error
+        return PageRaster(
+            page_num=raster.page_num,
+            width=raster.width,
+            height=raster.height,
+            stride=raster.stride,
+            pixel_format=cast(RasterPixelFormat, raster.pixel_format),
+            pixels=raster.pixels,
+        )
 
     def close(self) -> None:
         """Release the retained document. Safe to call more than once."""
@@ -955,6 +983,47 @@ class LiteParse:
             raise
         except Exception as error:
             raise ParseError(str(error)) from error
+
+    def raster_page(
+        self,
+        file_data: Union[str, Path, bytes],
+        page_num: int,
+        options: Optional[PageRasterOptions] = None,
+    ) -> PageRaster:
+        """Render one 1-based source page to unencoded, tightly packed pixels."""
+        options = options or PageRasterOptions()
+        try:
+            if isinstance(file_data, bytes):
+                raster = self._native.raster_page_bytes(
+                    file_data,
+                    page_num,
+                    dpi=options.dpi,
+                    pixel_format=options.pixel_format,
+                    render_form_fields=options.render_form_fields,
+                )
+            else:
+                file_path = Path(file_data)
+                if not file_path.exists():
+                    raise FileNotFoundError(f"File not found: {file_path}")
+                raster = self._native.raster_page(
+                    str(file_path.absolute()),
+                    page_num,
+                    dpi=options.dpi,
+                    pixel_format=options.pixel_format,
+                    render_form_fields=options.render_form_fields,
+                )
+        except FileNotFoundError:
+            raise
+        except Exception as error:
+            raise ParseError(str(error)) from error
+        return PageRaster(
+            page_num=raster.page_num,
+            width=raster.width,
+            height=raster.height,
+            stride=raster.stride,
+            pixel_format=cast(RasterPixelFormat, raster.pixel_format),
+            pixels=raster.pixels,
+        )
 
     def get_config(self) -> LiteParseConfig:
         """Return the resolved configuration."""

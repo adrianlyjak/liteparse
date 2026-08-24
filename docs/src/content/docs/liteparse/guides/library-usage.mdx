@@ -131,6 +131,51 @@ try {
 }
 ```
 
+### Encoding raw page rasters
+
+`rasterPage()` returns owned `rgb8` or `rgbx8` pixels without first encoding a
+PNG. The PDFium lock is released before the promise resolves, so Sharp can
+encode the returned buffer while another page renders. Bound the worker count
+to limit the number of page buffers in memory. The fourth byte in `rgbx8` is
+opaque padding, not alpha.
+
+```typescript
+import { mkdir } from "node:fs/promises";
+import sharp from "sharp";
+
+const parser = new LiteParse({ ocrEnabled: false });
+const document = await parser.openDocument("document.pdf");
+await mkdir("pages", { recursive: true });
+
+try {
+  const workerCount = 4;
+  await Promise.all(
+    Array.from({ length: workerCount }, async (_, worker) => {
+      // Each worker retains at most one page raster.
+      for (
+        let pageNum = worker + 1;
+        pageNum <= document.pageCount;
+        pageNum += workerCount
+      ) {
+        const raster = await document.rasterPage(pageNum, {
+          dpi: 150,
+          pixelFormat: "rgb8",
+        });
+        // Sharp receives raw pixels after PDFium has released its lock. No PNG
+        // intermediary is encoded or decoded.
+        await sharp(raster.pixels, {
+          raw: { width: raster.width, height: raster.height, channels: 3 },
+        })
+          .jpeg({ quality: 85 })
+          .toFile(`pages/${pageNum}.jpg`);
+      }
+    }),
+  );
+} finally {
+  await document.close();
+}
+```
+
 ### Screenshots
 
 Generate page images as buffers — useful for sending to LLMs or saving to disk:
@@ -244,6 +289,61 @@ with parser.open_document("document.pdf") as document:
             output.write(screenshot.image_bytes)
 ```
 
+### Encoding raw page rasters
+
+`raster_page()` returns owned `rgb8` or `rgbx8` pixels without first encoding a
+PNG. Pillow can encode the returned bytes after PDFium releases its lock. The
+semaphore below limits the number of live page buffers and concurrent encodes.
+The fourth byte in `rgbx8` is opaque padding, not alpha.
+
+```python
+import asyncio
+from pathlib import Path
+
+from PIL import Image
+from liteparse import LiteParse, OpenDocument, PageRasterOptions
+
+parser = LiteParse(ocr_enabled=False)
+
+
+def save_jpeg(document: OpenDocument, page_num: int) -> None:
+    raster = document.raster_page(
+        page_num,
+        PageRasterOptions(dpi=150, pixel_format="rgbx8"),
+    )
+    # Pillow reads the four-byte rows directly. JPEG stores RGB, so the final
+    # conversion drops the padding byte without a PNG intermediary.
+    image = Image.frombuffer(
+        "RGBX",
+        (raster.width, raster.height),
+        raster.pixels,
+        "raw",
+        "RGBX",
+        raster.stride,
+        1,
+    )
+    image.convert("RGB").save(Path("pages") / f"{page_num}.jpg", quality=85)
+
+
+async def main() -> None:
+    Path("pages").mkdir(exist_ok=True)
+    with parser.open_document("document.pdf") as document:
+        semaphore = asyncio.Semaphore(4)
+
+        async def one(page_num: int) -> None:
+            async with semaphore:
+                # Native rendering releases the GIL. PDFium's lock is free
+                # before Pillow starts encoding in the same worker thread.
+                await asyncio.to_thread(save_jpeg, document, page_num)
+
+        await asyncio.gather(
+            *(one(page_num) for page_num in range(1, document.page_count + 1))
+        )
+
+
+asyncio.run(main())
+```
+
 ### Screenshots
 
 ```python
@@ -331,6 +431,31 @@ for screenshot in document.screenshot_pages([1, 2])? {
     )?;
 }
 document.close();
+```
+
+### Raw page rasters
+
+`raster_page()` returns an owned, tightly packed pixel buffer. The buffer can
+move to an encoder thread after the PDFium transaction ends. `stride` is the
+number of bytes in each row.
+
+```rust
+use liteparse::{PageRasterOptions, RasterPixelFormat};
+
+let raster = document.raster_page(
+    1,
+    PageRasterOptions {
+        dpi: 150.0,
+        pixel_format: RasterPixelFormat::Rgbx8,
+        render_form_fields: false,
+    },
+)?;
+
+assert_eq!(raster.stride, raster.width * 4);
+assert_eq!(
+    raster.pixels.len(),
+    raster.stride as usize * raster.height as usize,
+);
 ```
 
 ### Configuration

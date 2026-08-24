@@ -4,27 +4,26 @@ use napi_derive::napi;
 mod types;
 
 use types::{
-    JsLiteParseConfig, JsPageComplexityStats, JsPageInput, JsParseBatch, JsParseResult,
-    JsScreenshotResult, JsTextItem,
+    JsLiteParseConfig, JsPageComplexityStats, JsPageInput, JsPageRaster, JsPageRasterOptions,
+    JsParseBatch, JsParseResult, JsScreenshotResult, JsTextItem,
 };
 
+fn page_number_from_js(page_number: f64) -> Result<u32> {
+    if page_number.is_finite()
+        && page_number.fract() == 0.0
+        && page_number >= 0.0
+        && page_number <= u32::MAX as f64
+    {
+        Ok(page_number as u32)
+    } else {
+        Err(Error::from_reason(format!(
+            "page number must be a finite integer representable as u32: {page_number}"
+        )))
+    }
+}
+
 fn page_numbers_from_js(page_numbers: Vec<f64>) -> Result<Vec<u32>> {
-    page_numbers
-        .into_iter()
-        .map(|page_number| {
-            if page_number.is_finite()
-                && page_number.fract() == 0.0
-                && page_number >= 0.0
-                && page_number <= u32::MAX as f64
-            {
-                Ok(page_number as u32)
-            } else {
-                Err(Error::from_reason(format!(
-                    "page number must be a finite integer representable as u32: {page_number}"
-                )))
-            }
-        })
-        .collect()
+    page_numbers.into_iter().map(page_number_from_js).collect()
 }
 
 /// Main LiteParse parser class.
@@ -231,6 +230,29 @@ impl LiteParse {
         Ok(results.into_iter().map(JsScreenshotResult::from).collect())
     }
 
+    /// Render one 1-based source page to an owned, unencoded pixel buffer.
+    #[napi]
+    pub async fn raster_page(
+        &self,
+        input: Either<String, Buffer>,
+        page_num: f64,
+        options: Option<JsPageRasterOptions>,
+    ) -> Result<JsPageRaster> {
+        use liteparse::types::PdfInput;
+
+        let pdf_input = match input {
+            Either::A(path) => PdfInput::Path(path),
+            Either::B(buf) => PdfInput::Bytes(buf.to_vec()),
+        };
+        let page_num = page_number_from_js(page_num)?;
+        let raster = self
+            .inner
+            .raster_page_input(pdf_input, page_num, options.unwrap_or_default().into_rust())
+            .await
+            .map_err(|error| Error::from_reason(error.to_string()))?;
+        Ok(JsPageRaster::from_rust(raster))
+    }
+
     /// Get the current configuration.
     #[napi(getter)]
     pub fn config(&self) -> JsLiteParseConfig {
@@ -285,6 +307,20 @@ impl OpenDocument {
         })
     }
 
+    /// Render one 1-based page to an owned, unencoded pixel buffer.
+    #[napi(ts_return_type = "Promise<JsPageRaster>")]
+    pub fn raster_page(
+        &self,
+        page_num: f64,
+        options: Option<JsPageRasterOptions>,
+    ) -> AsyncTask<RasterPageTask> {
+        AsyncTask::new(RasterPageTask {
+            document: self.inner.clone(),
+            page_num,
+            options: options.unwrap_or_default(),
+        })
+    }
+
     /// Reopen the PDFium document while retaining the normalized PDF.
     #[napi(ts_return_type = "Promise<void>")]
     pub fn reopen(&self) -> AsyncTask<DocumentTask> {
@@ -326,6 +362,29 @@ impl Task for ScreenshotPagesTask {
             .into_iter()
             .map(JsScreenshotResult::from)
             .collect())
+    }
+}
+
+pub struct RasterPageTask {
+    document: std::sync::Arc<liteparse::OpenDocument>,
+    page_num: f64,
+    options: JsPageRasterOptions,
+}
+
+#[napi]
+impl Task for RasterPageTask {
+    type Output = liteparse::PageRaster;
+    type JsValue = JsPageRaster;
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        let page_num = page_number_from_js(self.page_num)?;
+        self.document
+            .raster_page(page_num, self.options.clone().into_rust())
+            .map_err(|error| Error::from_reason(error.to_string()))
+    }
+
+    fn resolve(&mut self, _env: Env, raster: Self::Output) -> Result<Self::JsValue> {
+        Ok(JsPageRaster::from_rust(raster))
     }
 }
 

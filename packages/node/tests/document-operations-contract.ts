@@ -4,6 +4,8 @@ import type {
   LiteParseInput,
   OpenDocument,
   PageInput,
+  PageRaster,
+  PageRasterOptions,
   ParseResult,
   ScreenshotResult,
 } from "../src/lib.js";
@@ -28,6 +30,20 @@ const oneShotScreenshots: Promise<ScreenshotResult[]> =
   oneShotOperations.screenshotPages(input, [3, 1, 3]);
 const retainedScreenshots: Promise<ScreenshotResult[]> =
   retainedOperations.screenshotPages([3, 1, 3]);
+const rasterOptions: PageRasterOptions = {
+  dpi: 96,
+  pixelFormat: "rgbx8",
+  renderFormFields: true,
+};
+const oneShotRaster: Promise<PageRaster> = oneShotOperations.rasterPage(
+  input,
+  2,
+  rasterOptions,
+);
+const retainedRaster: Promise<PageRaster> = retainedOperations.rasterPage(
+  2,
+  rasterOptions,
+);
 
 // LiteParse keeps its existing synchronous projection overload and adds an
 // async two-argument overload for selected source pages.
@@ -37,6 +53,11 @@ const selectedScreenshots: Promise<ScreenshotResult[]> = parser.screenshotPages(
   input,
   [3, 1, 3],
 );
+const sourceRaster: Promise<PageRaster> = parser.rasterPage(
+  input,
+  2,
+  rasterOptions,
+);
 
 void [
   oneShotParse,
@@ -45,7 +66,10 @@ void [
   retainedSelectedParse,
   oneShotScreenshots,
   retainedScreenshots,
+  oneShotRaster,
+  retainedRaster,
   projected,
   selected,
   selectedScreenshots,
+  sourceRaster,
 ];

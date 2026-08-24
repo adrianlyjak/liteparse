@@ -165,6 +165,11 @@ try {
   console.log(document.pageCount);
   const result = await document.parsePages([1, 2]);
   const screenshots = await document.screenshotPages([1, 2]);
+  const raster = await document.rasterPage(1, {
+    dpi: 150,
+    pixelFormat: 'rgb8',
+  });
+  console.log(`${raster.width}x${raster.height}, ${raster.stride} bytes/row`);
   await Promise.all(
     screenshots.map((page) =>
       writeFile(`page_${page.pageNum}.png`, page.imageBuffer),
@@ -192,6 +197,26 @@ for (const s of screenshots) {
 
 The existing `screenshot(input, pageNumbers?)` method remains available when
 you want to render every page by omitting the selection.
+
+## Raw Page Rasters
+
+Render one page to owned, unencoded `rgb8` or `rgbx8` pixels. Use the one-shot
+form for a single render, or `document.rasterPage()` when reusing an open
+document:
+
+```typescript
+const raster = await parser.rasterPage('document.pdf', 1, {
+  dpi: 150,
+  pixelFormat: 'rgbx8',
+  renderFormFields: true,
+});
+
+console.log(raster.width, raster.height, raster.stride, raster.pixelFormat);
+// raster.pixels is a tightly packed Buffer suitable for a raw image encoder.
+```
+
+`rgb8` uses three bytes per pixel. `rgbx8` uses four bytes per pixel, with an
+opaque padding byte rather than an alpha channel.
 
 ## Document Complexity
 
