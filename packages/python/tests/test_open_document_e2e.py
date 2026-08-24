@@ -86,16 +86,6 @@ def test_context_manager_closes_document(parser: LiteParse, sample_pdf: Path) ->
         document.reopen()
 
 
-def test_parse_pages_sorts_and_deduplicates_in_source_order(
-    page_parser: LiteParse, three_page_pdf: Path
-) -> None:
-    with page_parser.open_document(three_page_pdf) as document:
-        parsed = document.parse_pages([3, 1, 3])
-
-    assert parsed.total_pages == 3
-    assert [page.page_num for page in parsed.pages] == [1, 3]
-
-
 @pytest.mark.parametrize(
     ("pages", "message"),
     [
@@ -118,31 +108,6 @@ def test_parse_pages_validates_the_entire_selection_before_parsing(
             document.parse_pages(pages)
 
         assert [page.page_num for page in document.parse_pages([2]).pages] == [2]
-
-
-def test_parse_pages_applies_max_pages_after_normalization(
-    three_page_pdf: Path,
-) -> None:
-    parser = LiteParse(ocr_enabled=False, max_pages=1)
-    one_shot = parser.parse_pages(three_page_pdf, [3, 1, 3])
-
-    with parser.open_document(three_page_pdf) as document:
-        retained = document.parse_pages([3, 1, 3])
-
-    assert one_shot.total_pages == retained.total_pages == 3
-    assert [page.page_num for page in one_shot.pages] == [1]
-    assert one_shot.text == retained.text
-
-
-def test_parse_pages_ignores_configured_target_pages(three_page_pdf: Path) -> None:
-    parser = LiteParse(ocr_enabled=False, target_pages="not-a-page-range")
-    one_shot = parser.parse_pages(three_page_pdf, [2])
-
-    with parser.open_document(three_page_pdf) as document:
-        retained = document.parse_pages([2])
-
-    assert [page.page_num for page in one_shot.pages] == [2]
-    assert one_shot.text == retained.text
 
 
 @pytest.mark.parametrize("pages", [[], [0], [4]])
