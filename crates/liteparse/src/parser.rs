@@ -1818,13 +1818,13 @@ impl DocumentOperations for OpenDocument {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn raster_page(
+    async fn raster_page(
         &self,
         (): (),
         page_num: u32,
         options: PageRasterOptions,
-    ) -> impl Future<Output = Result<PageRaster, LiteParseError>> + Send {
-        async move { OpenDocument::raster_page(self, page_num, options) }
+    ) -> Result<PageRaster, LiteParseError> {
+        OpenDocument::raster_page(self, page_num, options)
     }
 }
 
