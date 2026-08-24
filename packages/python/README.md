@@ -116,8 +116,8 @@ print(result.text)
 
 ## Keep a Document Open
 
-Open a document once when you need to parse several page selections. Supported
-non-PDF inputs are converted to a temporary PDF once:
+Open a document once when you need to parse or render several page selections.
+Supported non-PDF inputs are converted to a temporary PDF once:
 
 ```python
 from liteparse import LiteParse
@@ -126,6 +126,9 @@ parser = LiteParse(ocr_enabled=False)
 with parser.open_document("document.pdf") as document:
     print(document.page_count)
     result = document.parse_pages([1, 2])
+    for screenshot in document.screenshot_pages([1, 2]):
+        with open(f"page_{screenshot.page_num}.png", "wb") as output:
+            output.write(screenshot.image_bytes)
 ```
 
 Call `document.reopen()` between large page groups to release PDFium's
@@ -133,15 +136,18 @@ document-level caches without converting the input again.
 
 ## Screenshots
 
-Generate PNG screenshots of document pages:
+Generate PNG screenshots of selected document pages:
 
 ```python
-screenshots = parser.screenshot("document.pdf", page_numbers=[1, 2, 3])
+screenshots = parser.screenshot_pages("document.pdf", [1, 2, 3])
 for s in screenshots:
     print(f"Page {s.page_num}: {s.width}x{s.height}")
     with open(f"page_{s.page_num}.png", "wb") as f:
         f.write(s.image_bytes)
 ```
+
+The existing `screenshot(file_path, page_numbers=...)` method remains
+available and renders every page when `page_numbers` is omitted.
 
 ## Document Complexity
 

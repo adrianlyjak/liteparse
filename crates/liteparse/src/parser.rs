@@ -75,6 +75,19 @@ pub struct ScreenshotResult {
     pub rects: Vec<ScreenshotRect>,
 }
 
+impl From<render::RenderedPage> for ScreenshotResult {
+    fn from(page: render::RenderedPage) -> Self {
+        Self {
+            page_num: page.page_num,
+            width: page.width,
+            height: page.height,
+            image_bytes: page.png_bytes,
+            is_solid_fill: page.is_solid_fill,
+            rects: page.rects,
+        }
+    }
+}
+
 /// Env var pointing at a fragmented glyph-outline → unicode font database
 /// directory (`%02x%02x.msgpack` shards). When set, [`LiteParse::new`]
 /// auto-wires a [`crate::FontDbResolver`] so buggy/obfuscated-font glyphs are
@@ -184,6 +197,8 @@ pub(crate) struct ResolvedInput {
     input: PdfInput,
     #[cfg(not(target_arch = "wasm32"))]
     guard: Option<conversion::PdfInputGuard>,
+    #[cfg(not(target_arch = "wasm32"))]
+    render_rejection_extension: Option<String>,
 }
 
 impl ResolvedInput {
@@ -199,6 +214,14 @@ impl ResolvedInput {
         #[cfg(target_arch = "wasm32")]
         {
             false
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn ensure_renderable(&self) -> Result<(), LiteParseError> {
+        match &self.render_rejection_extension {
+            Some(extension) => Err(conversion::screenshot_text_format_error(extension)),
+            None => Ok(()),
         }
     }
 }
@@ -269,6 +292,16 @@ pub trait DocumentOperations: Sync {
         input: Self::Input,
         page_numbers: P,
     ) -> impl Future<Output = Result<ParseResult, LiteParseError>> + Send
+    where
+        P: AsRef<[u32]> + Send;
+
+    /// Render explicit 1-based source pages as PNG screenshots.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn screenshot_pages<P>(
+        &self,
+        input: Self::Input,
+        page_numbers: P,
+    ) -> impl Future<Output = Result<Vec<ScreenshotResult>, LiteParseError>> + Send
     where
         P: AsRef<[u32]> + Send;
 }
@@ -491,6 +524,82 @@ fn render_ocr_transaction(
     Ok((rendered, next_start))
 }
 
+fn with_render_document<T, F>(
+    parser: &LiteParse,
+    transaction: PdfTransaction<'_>,
+    render_form_fields: bool,
+    operation: F,
+) -> Result<T, LiteParseError>
+where
+    F: FnOnce(&pdfium::Document) -> Result<T, LiteParseError>,
+{
+    // A form environment can mutate document state. Use a scratch document
+    // whenever form appearances are requested so the retained canonical
+    // document remains safe for later operations.
+    let scratch = (render_form_fields || transaction.canonical.is_none())
+        .then(|| {
+            extract::load_document_from_input(
+                transaction.library,
+                &transaction.resolved.input,
+                parser.config.password.as_deref(),
+            )
+        })
+        .transpose()?;
+    let document = scratch
+        .as_ref()
+        .or(transaction.canonical.as_ref())
+        .expect("a PDF transaction must provide or open a document");
+    operation(document)
+}
+
+fn screenshot_transaction(
+    parser: &LiteParse,
+    transaction: PdfTransaction<'_>,
+    page_numbers: Option<&[u32]>,
+) -> Result<Vec<ScreenshotResult>, LiteParseError> {
+    with_render_document(
+        parser,
+        transaction,
+        parser.config.render_form_fields,
+        |document| {
+            if let Some(page_numbers) = page_numbers {
+                validate_screenshot_page_numbers(
+                    page_numbers,
+                    document.page_count().max(0) as u32,
+                )?;
+            }
+            render::render_document_pages(
+                document,
+                page_numbers,
+                parser.config.dpi,
+                parser.config.detect_screenshot_rects,
+                parser.config.render_form_fields,
+                false,
+            )
+            .map(|pages| pages.into_iter().map(ScreenshotResult::from).collect())
+        },
+    )
+}
+
+fn validate_screenshot_page_numbers(
+    page_numbers: &[u32],
+    total_pages: u32,
+) -> Result<(), LiteParseError> {
+    if page_numbers.is_empty() {
+        return Err(LiteParseError::Other(
+            "page selection cannot be empty".to_string(),
+        ));
+    }
+    for &page_number in page_numbers {
+        if page_number == 0 || page_number > total_pages {
+            return Err(LiteParseError::Other(format!(
+                "page {page_number} out of range (document has {total_pages} pages)"
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn extract_loaded_document(
     parser: &LiteParse,
     transaction: &PdfTransaction<'_>,
@@ -624,14 +733,7 @@ fn extract_loaded_document(
             parser.config.continue_on_page_error,
         )?
         .into_iter()
-        .map(|page| ScreenshotResult {
-            page_num: page.page_num,
-            width: page.width,
-            height: page.height,
-            image_bytes: page.png_bytes,
-            is_solid_fill: page.is_solid_fill,
-            rects: page.rects,
-        })
+        .map(ScreenshotResult::from)
         .collect()
     } else {
         Vec::new()
@@ -1016,18 +1118,34 @@ impl LiteParse {
     async fn resolve_input(&self, input: PdfInput) -> Result<ResolvedInput, LiteParseError> {
         #[cfg(not(target_arch = "wasm32"))]
         {
+            let render_rejection_extension = conversion::text_only_input_extension(&input);
             let (input, guard) =
                 conversion::resolve_pdf_input(input, self.config.password.as_deref(), false)
                     .await?;
             Ok(ResolvedInput {
                 input,
                 guard: Some(guard),
+                render_rejection_extension,
             })
         }
         #[cfg(target_arch = "wasm32")]
         {
             Ok(ResolvedInput { input })
         }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    async fn resolve_renderable_input(
+        &self,
+        input: PdfInput,
+    ) -> Result<ResolvedInput, LiteParseError> {
+        let (input, guard) =
+            conversion::resolve_pdf_input(input, self.config.password.as_deref(), true).await?;
+        Ok(ResolvedInput {
+            input,
+            guard: Some(guard),
+            render_rejection_extension: None,
+        })
     }
 
     /// Parse an already-resolved input over an explicit page selection.
@@ -1336,41 +1454,45 @@ impl LiteParse {
         input: PdfInput,
         page_numbers: Option<Vec<u32>>,
     ) -> Result<Vec<ScreenshotResult>, LiteParseError> {
-        let log = |msg: &str| {
-            if !self.config.quiet {
-                eprintln!("{}", msg);
-            }
-        };
-
-        let (validated_input, _guard) =
-            conversion::resolve_pdf_input(input, self.config.password.as_deref(), true).await?;
-
-        if let PdfInput::Path(ref path) = validated_input
-            && !conversion::is_pdf(path)
-        {
-            log("[liteparse] converted input to PDF for screenshot rendering");
+        let resolved = self.resolve_renderable_input(input).await?;
+        ReopeningDocumentAccess {
+            resolved: &resolved,
         }
+        .transact(|transaction| screenshot_transaction(self, transaction, page_numbers.as_deref()))
+    }
 
-        let rendered = render::render_pages_to_png(
-            &validated_input,
-            page_numbers.as_deref(),
-            self.config.dpi,
-            self.config.password.as_deref(),
-            self.config.detect_screenshot_rects,
-            self.config.render_form_fields,
-        )?;
+    /// Render explicit 1-based source pages as PNG screenshots.
+    ///
+    /// The selection must be nonempty and entirely within the document. The
+    /// result preserves input order and duplicate page numbers.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn screenshot_pages_input<P>(
+        &self,
+        input: PdfInput,
+        page_numbers: P,
+    ) -> Result<Vec<ScreenshotResult>, LiteParseError>
+    where
+        P: AsRef<[u32]>,
+    {
+        let resolved = self.resolve_renderable_input(input).await?;
+        let page_numbers = page_numbers.as_ref();
+        ReopeningDocumentAccess {
+            resolved: &resolved,
+        }
+        .transact(|transaction| screenshot_transaction(self, transaction, Some(page_numbers)))
+    }
 
-        Ok(rendered
-            .into_iter()
-            .map(|page| ScreenshotResult {
-                page_num: page.page_num,
-                width: page.width,
-                height: page.height,
-                image_bytes: page.png_bytes,
-                is_solid_fill: page.is_solid_fill,
-                rects: page.rects,
-            })
-            .collect())
+    /// Render explicit 1-based source pages as PNG screenshots.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn screenshot_pages<P>(
+        &self,
+        input: PdfInput,
+        page_numbers: P,
+    ) -> Result<Vec<ScreenshotResult>, LiteParseError>
+    where
+        P: AsRef<[u32]>,
+    {
+        self.screenshot_pages_input(input, page_numbers).await
     }
 
     pub fn config(&self) -> &LiteParseConfig {
@@ -1448,6 +1570,18 @@ impl DocumentOperations for LiteParse {
     {
         LiteParse::parse_pages(self, input, page_numbers)
     }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn screenshot_pages<P>(
+        &self,
+        input: Self::Input,
+        page_numbers: P,
+    ) -> impl Future<Output = Result<Vec<ScreenshotResult>, LiteParseError>> + Send
+    where
+        P: AsRef<[u32]> + Send,
+    {
+        LiteParse::screenshot_pages(self, input, page_numbers)
+    }
 }
 
 impl OpenDocument {
@@ -1511,6 +1645,24 @@ impl OpenDocument {
         self.parse_selected(Some(&page_numbers)).await
     }
 
+    /// Render explicit 1-based source pages as PNG screenshots.
+    ///
+    /// The selection must be nonempty and entirely within the document. The
+    /// result preserves input order and duplicate page numbers.
+    pub fn screenshot_pages<P>(
+        &self,
+        page_numbers: P,
+    ) -> Result<Vec<ScreenshotResult>, LiteParseError>
+    where
+        P: AsRef<[u32]>,
+    {
+        let page_numbers = page_numbers.as_ref();
+        self.transact(|transaction| {
+            transaction.resolved.ensure_renderable()?;
+            screenshot_transaction(&self.parser, transaction, Some(page_numbers))
+        })
+    }
+
     /// Reopen the PDFium document while retaining the normalized PDF.
     ///
     /// This releases document-level PDFium caches without repeating input
@@ -1562,6 +1714,18 @@ impl DocumentOperations for OpenDocument {
         P: AsRef<[u32]> + Send,
     {
         OpenDocument::parse_pages(self, page_numbers)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    async fn screenshot_pages<P>(
+        &self,
+        (): (),
+        page_numbers: P,
+    ) -> Result<Vec<ScreenshotResult>, LiteParseError>
+    where
+        P: AsRef<[u32]> + Send,
+    {
+        OpenDocument::screenshot_pages(self, page_numbers)
     }
 }
 

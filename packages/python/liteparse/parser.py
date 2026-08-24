@@ -44,6 +44,27 @@ def _convert_rect(rect: Any) -> Optional[AnnotationRect]:
     )
 
 
+def _convert_screenshot(screenshot: Any) -> ScreenshotResult:
+    return ScreenshotResult(
+        page_num=screenshot.page_num,
+        width=screenshot.width,
+        height=screenshot.height,
+        image_bytes=screenshot.image_bytes,
+        is_solid_fill=screenshot.is_solid_fill,
+        rects=[
+            ScreenshotRect(
+                x=rect.x,
+                y=rect.y,
+                width=rect.width,
+                height=rect.height,
+                color=rect.color,
+                is_line=rect.is_line,
+            )
+            for rect in screenshot.rects
+        ],
+    )
+
+
 def _convert_cell(cell: Any) -> LayoutCell:
     return LayoutCell(text=cell.text, bbox=_convert_rect(cell.bbox))
 
@@ -391,25 +412,8 @@ def _convert_native_result(native_result: Any) -> ParseResult:
         total_pages=getattr(native_result, "total_pages", len(pages)),
         images=images,
         screenshots=[
-            ScreenshotResult(
-                page_num=screenshot.page_num,
-                width=screenshot.width,
-                height=screenshot.height,
-                image_bytes=screenshot.image_bytes,
-                is_solid_fill=getattr(screenshot, "is_solid_fill", False),
-                rects=[
-                    ScreenshotRect(
-                        x=rect.x,
-                        y=rect.y,
-                        width=rect.width,
-                        height=rect.height,
-                        color=rect.color,
-                        is_line=rect.is_line,
-                    )
-                    for rect in getattr(screenshot, "rects", [])
-                ],
-            )
-            for screenshot in getattr(native_result, "screenshots", [])
+            _convert_screenshot(screenshot)
+            for screenshot in native_result.screenshots
         ],
         image_error_count=getattr(native_result, "image_error_count", 0),
         page_errors=[
@@ -436,7 +440,9 @@ def _convert_native_result(native_result: Any) -> ParseResult:
     )
 
 
-_DOCUMENT_OPERATION_NAMES = frozenset({"parse", "parse_pages"})
+_DOCUMENT_OPERATION_NAMES = frozenset(
+    {"parse", "parse_pages", "screenshot_pages"}
+)
 
 
 class OpenDocument:
@@ -463,6 +469,18 @@ class OpenDocument:
             return _convert_native_result(
                 self._native.parse_pages(list(page_numbers))
             )
+        except Exception as error:
+            raise ParseError(str(error)) from error
+
+    def screenshot_pages(
+        self, page_numbers: Iterable[int]
+    ) -> List[ScreenshotResult]:
+        """Render explicit 1-based source pages as PNG screenshots."""
+        try:
+            return [
+                _convert_screenshot(result)
+                for result in self._native.screenshot_pages(list(page_numbers))
+            ]
         except Exception as error:
             raise ParseError(str(error)) from error
 
@@ -909,29 +927,34 @@ class LiteParse:
                 str(file_path.absolute()),
                 page_numbers,
             )
-            return [
-                ScreenshotResult(
-                    page_num=r.page_num,
-                    width=r.width,
-                    height=r.height,
-                    image_bytes=r.image_bytes,
-                    is_solid_fill=getattr(r, "is_solid_fill", False),
-                    rects=[
-                        ScreenshotRect(
-                            x=rect.x,
-                            y=rect.y,
-                            width=rect.width,
-                            height=rect.height,
-                            color=rect.color,
-                            is_line=rect.is_line,
-                        )
-                        for rect in getattr(r, "rects", [])
-                    ],
-                )
-                for r in native_results
-            ]
+            return [_convert_screenshot(result) for result in native_results]
         except Exception as e:
             raise ParseError(str(e)) from e
+
+    def screenshot_pages(
+        self,
+        file_data: Union[str, Path, bytes],
+        page_numbers: Iterable[int],
+    ) -> List[ScreenshotResult]:
+        """Render explicit 1-based source pages as PNG screenshots."""
+        try:
+            pages = list(page_numbers)
+            if isinstance(file_data, bytes):
+                native_results = self._native.screenshot_pages_bytes(
+                    file_data, pages
+                )
+            else:
+                file_path = Path(file_data)
+                if not file_path.exists():
+                    raise FileNotFoundError(f"File not found: {file_path}")
+                native_results = self._native.screenshot_pages(
+                    str(file_path.absolute()), pages
+                )
+            return [_convert_screenshot(result) for result in native_results]
+        except FileNotFoundError:
+            raise
+        except Exception as error:
+            raise ParseError(str(error)) from error
 
     def get_config(self) -> LiteParseConfig:
         """Return the resolved configuration."""

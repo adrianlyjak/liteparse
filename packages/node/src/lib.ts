@@ -507,6 +507,9 @@ export interface DocumentOperations<SourceArgs extends unknown[]> {
   parsePages(
     ...args: [...SourceArgs, pageNumbers: readonly number[]]
   ): Promise<ParseResult>;
+  screenshotPages(
+    ...args: [...SourceArgs, pageNumbers: readonly number[]]
+  ): Promise<ScreenshotResult[]>;
 }
 
 /** A document normalized to PDF and kept open for repeated page operations. */
@@ -524,6 +527,14 @@ export class OpenDocument implements DocumentOperations<[]> {
   /** Parse explicit 1-based source pages in source-document order. */
   async parsePages(pageNumbers: readonly number[]): Promise<ParseResult> {
     return toParseResult(await this._native.parsePages(Array.from(pageNumbers)));
+  }
+
+  /** Render explicit 1-based source pages as PNG screenshots. */
+  async screenshotPages(
+    pageNumbers: readonly number[],
+  ): Promise<ScreenshotResult[]> {
+    const results = await this._native.screenshotPages(Array.from(pageNumbers));
+    return results.map(toScreenshot);
   }
 
   /** Release PDFium caches and reopen the normalized PDF. */
@@ -864,6 +875,20 @@ export class LiteParse implements DocumentOperations<[input: LiteParseInput]> {
       isSolidFill: r.isSolidFill,
       rects: r.rects,
     }));
+  }
+
+  /** Render explicit 1-based source pages as PNG screenshots. */
+  async screenshotPages(
+    input: LiteParseInput,
+    pageNumbers: readonly number[],
+  ): Promise<ScreenshotResult[]> {
+    const nativeInput =
+      typeof input === "string" ? input : Buffer.from(input);
+    const results = await this._native.screenshotPages(
+      nativeInput,
+      Array.from(pageNumbers),
+    );
+    return results.map(toScreenshot);
   }
 
   getConfig(): LiteParseConfig {

@@ -1376,6 +1376,26 @@ impl PyOpenDocument {
         Ok(PyParseResult::from_rust(result, self.extract_text_metadata))
     }
 
+    fn screenshot_pages(
+        &self,
+        py: Python<'_>,
+        page_numbers: Vec<u32>,
+    ) -> PyResult<Vec<PyScreenshotResult>> {
+        py.detach(|| {
+            self.inner
+                .screenshot_pages(page_numbers)
+                .map(|results| {
+                    results
+                        .into_iter()
+                        .map(PyScreenshotResult::from_rust)
+                        .collect()
+                })
+                .map_err(|error| {
+                    PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(error.to_string())
+                })
+        })
+    }
+
     fn close(&self, py: Python<'_>) {
         py.detach(|| self.inner.close());
     }
@@ -1837,6 +1857,26 @@ impl LiteParse {
         })
     }
 
+    /// Render explicit 1-based source pages as PNG screenshots.
+    fn screenshot_pages(
+        &self,
+        py: Python<'_>,
+        input: String,
+        page_numbers: Vec<u32>,
+    ) -> PyResult<Vec<PyScreenshotResult>> {
+        self.render_selected_pages(py, PdfInput::Path(input), page_numbers)
+    }
+
+    /// Render explicit 1-based source pages from raw document bytes.
+    fn screenshot_pages_bytes(
+        &self,
+        py: Python<'_>,
+        data: Vec<u8>,
+        page_numbers: Vec<u32>,
+    ) -> PyResult<Vec<PyScreenshotResult>> {
+        self.render_selected_pages(py, PdfInput::Bytes(data), page_numbers)
+    }
+
     /// Get the resolved configuration.
     #[getter]
     fn config(&self) -> PyLiteParseConfig {
@@ -1870,6 +1910,27 @@ impl LiteParse {
             result,
             self.config.extract_text_metadata,
         ))
+    }
+
+    fn render_selected_pages(
+        &self,
+        py: Python<'_>,
+        input: PdfInput,
+        page_numbers: Vec<u32>,
+    ) -> PyResult<Vec<PyScreenshotResult>> {
+        py.detach(|| {
+            self.runtime
+                .block_on(self.inner.screenshot_pages_input(input, page_numbers))
+                .map(|results| {
+                    results
+                        .into_iter()
+                        .map(PyScreenshotResult::from_rust)
+                        .collect()
+                })
+                .map_err(|error| {
+                    PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(error.to_string())
+                })
+        })
     }
 
     fn open_retained_document(&self, py: Python<'_>, input: PdfInput) -> PyResult<PyOpenDocument> {

@@ -206,21 +206,29 @@ impl LiteParse {
             .await
             .map_err(|e| Error::from_reason(e.to_string()))?;
 
-        Ok(results
-            .into_iter()
-            .map(|r| JsScreenshotResult {
-                page_num: r.page_num,
-                width: r.width,
-                height: r.height,
-                image_buffer: r.image_bytes.into(),
-                is_solid_fill: r.is_solid_fill,
-                rects: r
-                    .rects
-                    .iter()
-                    .map(crate::types::JsScreenshotRect::from_rust)
-                    .collect(),
-            })
-            .collect())
+        Ok(results.into_iter().map(JsScreenshotResult::from).collect())
+    }
+
+    /// Render explicit 1-based source pages as PNG screenshots.
+    #[napi]
+    pub async fn screenshot_pages(
+        &self,
+        input: Either<String, Buffer>,
+        page_numbers: Vec<f64>,
+    ) -> Result<Vec<JsScreenshotResult>> {
+        use liteparse::types::PdfInput;
+
+        let pdf_input = match input {
+            Either::A(path) => PdfInput::Path(path),
+            Either::B(buf) => PdfInput::Bytes(buf.to_vec()),
+        };
+        let page_numbers = page_numbers_from_js(page_numbers)?;
+        let results = self
+            .inner
+            .screenshot_pages_input(pdf_input, page_numbers)
+            .await
+            .map_err(|error| Error::from_reason(error.to_string()))?;
+        Ok(results.into_iter().map(JsScreenshotResult::from).collect())
     }
 
     /// Get the current configuration.
@@ -268,6 +276,15 @@ impl OpenDocument {
         Ok(JsParseResult::from_rust(&result, &self.config))
     }
 
+    /// Render explicit 1-based source pages as PNG screenshots.
+    #[napi(ts_return_type = "Promise<Array<JsScreenshotResult>>")]
+    pub fn screenshot_pages(&self, page_numbers: Vec<f64>) -> AsyncTask<ScreenshotPagesTask> {
+        AsyncTask::new(ScreenshotPagesTask {
+            document: self.inner.clone(),
+            page_numbers,
+        })
+    }
+
     /// Reopen the PDFium document while retaining the normalized PDF.
     #[napi(ts_return_type = "Promise<void>")]
     pub fn reopen(&self) -> AsyncTask<DocumentTask> {
@@ -284,6 +301,31 @@ impl OpenDocument {
             document: self.inner.clone(),
             operation: DocumentOperation::Close,
         })
+    }
+}
+
+pub struct ScreenshotPagesTask {
+    document: std::sync::Arc<liteparse::OpenDocument>,
+    page_numbers: Vec<f64>,
+}
+
+#[napi]
+impl Task for ScreenshotPagesTask {
+    type Output = Vec<liteparse::ScreenshotResult>;
+    type JsValue = Vec<JsScreenshotResult>;
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        let page_numbers = page_numbers_from_js(std::mem::take(&mut self.page_numbers))?;
+        self.document
+            .screenshot_pages(page_numbers)
+            .map_err(|error| Error::from_reason(error.to_string()))
+    }
+
+    fn resolve(&mut self, _env: Env, screenshots: Self::Output) -> Result<Self::JsValue> {
+        Ok(screenshots
+            .into_iter()
+            .map(JsScreenshotResult::from)
+            .collect())
     }
 }
 

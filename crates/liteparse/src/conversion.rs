@@ -80,6 +80,20 @@ pub fn screenshot_text_format_error(ext: &str) -> LiteParseError {
     ))
 }
 
+/// Return the plain-text source extension when rendering must be rejected.
+pub fn text_only_input_extension(input: &crate::types::PdfInput) -> Option<String> {
+    use crate::types::PdfInput;
+
+    let extension = match input {
+        PdfInput::Path(path) => Path::new(path)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(str::to_lowercase),
+        PdfInput::Bytes(bytes) => guess_extension_from_data(bytes),
+    }?;
+    is_text_only_extension(&extension).then_some(extension)
+}
+
 /// Keeps converted PDF temp directories alive until rendering or parsing completes.
 /// All temp dirs are cleaned up automatically when this guard is dropped.
 #[derive(Debug)]
@@ -108,15 +122,12 @@ pub async fn resolve_pdf_input(
 ) -> Result<(crate::types::PdfInput, PdfInputGuard), LiteParseError> {
     use crate::types::PdfInput;
 
+    if reject_text_formats && let Some(extension) = text_only_input_extension(&input) {
+        return Err(screenshot_text_format_error(&extension));
+    }
+
     match input {
         PdfInput::Path(p) => {
-            let ext = Path::new(&p)
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("");
-            if reject_text_formats && is_text_only_extension(ext) {
-                return Err(screenshot_text_format_error(ext));
-            }
             if is_pdf(&p) {
                 Ok((PdfInput::Path(p), PdfInputGuard { temps: Vec::new() }))
             } else {
@@ -129,9 +140,6 @@ pub async fn resolve_pdf_input(
             let ext = guess_extension_from_data(&b);
             if ext.as_deref() == Some("pdf") {
                 return Ok((PdfInput::Bytes(b), PdfInputGuard { temps: Vec::new() }));
-            }
-            if reject_text_formats && ext.as_ref().is_some_and(|e| is_text_only_extension(e)) {
-                return Err(screenshot_text_format_error(ext.as_ref().unwrap()));
             }
             let (converted, temps) = convert_data_to_pdf(b, password).await?;
             Ok((PdfInput::Path(converted.pdf_path), PdfInputGuard { temps }))

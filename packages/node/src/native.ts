@@ -311,6 +311,7 @@ export interface NativeScreenshotResult {
 export interface NativeDocumentOperations {
   parse(): Promise<NativeParseResult>;
   parsePages(pageNumbers: number[]): Promise<NativeParseResult>;
+  screenshotPages(pageNumbers: number[]): Promise<NativeScreenshotResult[]>;
 }
 
 export interface NativeOpenDocument extends NativeDocumentOperations {
@@ -384,6 +385,10 @@ export interface LiteParseNative {
   screenshot(
     input: string | Buffer,
     pageNumbers?: number[] | null,
+  ): Promise<NativeScreenshotResult[]>;
+  screenshotPages(
+    input: string | Buffer,
+    pageNumbers: number[],
   ): Promise<NativeScreenshotResult[]>;
   format(result: NativeParseResult): string;
   readonly config: LiteParseNativeConfig;

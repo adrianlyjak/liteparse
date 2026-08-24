@@ -152,17 +152,24 @@ console.log(result.text);
 
 ## Keep a Document Open
 
-Open a document once when you need to parse several page selections. Supported
-non-PDF inputs are converted to a temporary PDF once:
+Open a document once when you need to parse or render several page selections.
+Supported non-PDF inputs are converted to a temporary PDF once:
 
 ```typescript
 import { LiteParse } from '@llamaindex/liteparse';
+import { writeFile } from 'node:fs/promises';
 
 const parser = new LiteParse({ ocrEnabled: false });
 const document = await parser.openDocument('document.pdf');
 try {
   console.log(document.pageCount);
   const result = await document.parsePages([1, 2]);
+  const screenshots = await document.screenshotPages([1, 2]);
+  await Promise.all(
+    screenshots.map((page) =>
+      writeFile(`page_${page.pageNum}.png`, page.imageBuffer),
+    ),
+  );
 } finally {
   await document.close();
 }
@@ -173,15 +180,18 @@ document-level caches without converting the input again.
 
 ## Screenshots
 
-Generate PNG screenshots of document pages:
+Generate PNG screenshots of selected document pages:
 
 ```typescript
-const screenshots = parser.screenshot('document.pdf', [1, 2, 3]);
+const screenshots = await parser.screenshotPages('document.pdf', [1, 2, 3]);
 for (const s of screenshots) {
   console.log(`Page ${s.pageNum}: ${s.width}x${s.height}`);
   // s.imageBuffer contains PNG bytes
 }
 ```
+
+The existing `screenshot(input, pageNumbers?)` method remains available when
+you want to render every page by omitting the selection.
 
 ## Document Complexity
 
