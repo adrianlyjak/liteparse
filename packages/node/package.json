@@ -42,6 +42,7 @@
     "build:rs": "napi build --cargo-cwd ../../crates/liteparse-napi --platform --release --js false --dts native.d.ts .",
     "build:pdfium": "bash scripts/copy-pdfium.sh .",
     "build:ts": "tsc",
+    "test:loader": "npm run build:ts && node --test tests/native-loader.test.mjs",
     "build": "npm run build:rs && npm run build:pdfium && npm run build:ts",
     "prepublishOnly": "npm run build"
   },

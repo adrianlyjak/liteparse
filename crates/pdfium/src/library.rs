@@ -3,7 +3,7 @@ use std::sync::Once;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-use crate::document::Document;
+use crate::document::{Document, RetainedDocument};
 use crate::error::PdfiumError;
 use crate::ffi;
 
@@ -108,15 +108,30 @@ impl Library {
 
         Ok(Document {
             handle,
+            owns_handle: true,
             _lib: std::marker::PhantomData,
         })
     }
 
-    pub fn load_document_from_bytes(
-        &self,
-        data: &[u8],
+    /// Load a PDF from a borrowed byte buffer.
+    ///
+    /// PDFium reads from the buffer lazily. The return type ties the document
+    /// to both this locked library and `data`:
+    ///
+    /// ```compile_fail
+    /// use liteparse_pdfium::Library;
+    /// let library = Library::init();
+    /// let document = {
+    ///     let data = vec![0_u8; 8];
+    ///     library.load_document_from_bytes(&data, None).unwrap()
+    /// };
+    /// let _ = document.page_count();
+    /// ```
+    pub fn load_document_from_bytes<'document>(
+        &'document self,
+        data: &'document [u8],
         password: Option<&str>,
-    ) -> Result<Document<'_>, PdfiumError> {
+    ) -> Result<Document<'document>, PdfiumError> {
         let c_password = password
             .map(|p| CString::new(p).map_err(|_| PdfiumError::OperationFailed))
             .transpose()?;
@@ -133,13 +148,93 @@ impl Library {
             return Err(PdfiumError::from_last_error());
         }
 
-        // SAFETY: pdfium requires the data buffer to outlive the document.
-        // The caller must ensure `data` lives long enough. For owned data,
-        // consider passing a Vec and having the Document hold it.
-        // For now, this is the caller's responsibility.
         Ok(Document {
             handle,
+            owns_handle: true,
             _lib: std::marker::PhantomData,
         })
+    }
+
+    /// Borrow a detached document for this locked PDFium transaction.
+    pub fn reborrow_document<'lib>(&'lib self, retained: &'lib RetainedDocument) -> Document<'lib> {
+        Document {
+            handle: retained.handle,
+            owns_handle: false,
+            _lib: std::marker::PhantomData,
+        }
+    }
+
+    /// Close a detached document while holding the process-global PDFium lock.
+    pub fn close_retained_document(&self, retained: RetainedDocument) {
+        unsafe { ffi!(FPDF_CloseDocument(retained.handle)) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn retained_document_moves_between_serialized_transactions() {
+        fn require_send<T: Send>() {}
+        require_send::<RetainedDocument>();
+
+        let bytes = include_bytes!("../../../integration_tests_data/sample.pdf");
+        let retained = {
+            let library = Library::init();
+            let document = library.load_document_from_bytes(bytes, None).unwrap();
+            assert!(document.page_count() > 0);
+            // SAFETY: `bytes` has static storage and the spawned thread closes
+            // the handle through a newly locked `Library`.
+            unsafe { document.detach().unwrap() }
+        };
+
+        std::thread::spawn(move || {
+            let library = Library::init();
+            assert!(library.reborrow_document(&retained).page_count() > 0);
+            library.close_retained_document(retained);
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn retained_document_cannot_be_detached_twice() {
+        let bytes = include_bytes!("../../../integration_tests_data/sample.pdf");
+        let library = Library::init();
+        let document = library.load_document_from_bytes(bytes, None).unwrap();
+        // SAFETY: `bytes` has static storage and this test closes the handle
+        // through the same locked `Library`.
+        let retained = unsafe { document.detach().unwrap() };
+        let reborrowed = library.reborrow_document(&retained);
+
+        // SAFETY: This deliberately exercises the runtime ownership check.
+        assert!(matches!(
+            unsafe { reborrowed.detach() },
+            Err(PdfiumError::OperationFailed)
+        ));
+        library.close_retained_document(retained);
+    }
+
+    #[test]
+    fn retained_document_reborrow_rejects_form_mutation() {
+        let bytes = include_bytes!("../../../integration_tests_data/filled_acroform.pdf");
+        let library = Library::init();
+        let document = library.load_document_from_bytes(bytes, None).unwrap();
+        assert!(document.form_environment().is_some());
+        // SAFETY: `bytes` has static storage and the retained handle is closed
+        // through the same locked `Library` before the test returns.
+        let retained = unsafe { document.detach().unwrap() };
+        let borrowed = library.reborrow_document(&retained);
+
+        assert!(borrowed.form_environment().is_none());
+        assert!(matches!(
+            borrowed.flatten_form_widgets(0),
+            Err(PdfiumError::OperationFailed)
+        ));
+
+        drop(borrowed);
+        library.close_retained_document(retained);
     }
 }
