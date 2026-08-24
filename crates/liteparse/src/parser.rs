@@ -197,6 +197,8 @@ pub(crate) struct ResolvedInput {
     input: PdfInput,
     #[cfg(not(target_arch = "wasm32"))]
     guard: Option<conversion::PdfInputGuard>,
+    #[cfg(not(target_arch = "wasm32"))]
+    render_rejection_extension: Option<String>,
 }
 
 impl ResolvedInput {
@@ -212,6 +214,14 @@ impl ResolvedInput {
         #[cfg(target_arch = "wasm32")]
         {
             false
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn ensure_renderable(&self) -> Result<(), LiteParseError> {
+        match &self.render_rejection_extension {
+            Some(extension) => Err(conversion::screenshot_text_format_error(extension)),
+            None => Ok(()),
         }
     }
 }
@@ -1108,12 +1118,14 @@ impl LiteParse {
     async fn resolve_input(&self, input: PdfInput) -> Result<ResolvedInput, LiteParseError> {
         #[cfg(not(target_arch = "wasm32"))]
         {
+            let render_rejection_extension = conversion::text_only_input_extension(&input);
             let (input, guard) =
                 conversion::resolve_pdf_input(input, self.config.password.as_deref(), false)
                     .await?;
             Ok(ResolvedInput {
                 input,
                 guard: Some(guard),
+                render_rejection_extension,
             })
         }
         #[cfg(target_arch = "wasm32")]
@@ -1132,6 +1144,7 @@ impl LiteParse {
         Ok(ResolvedInput {
             input,
             guard: Some(guard),
+            render_rejection_extension: None,
         })
     }
 
@@ -1469,6 +1482,19 @@ impl LiteParse {
         .transact(|transaction| screenshot_transaction(self, transaction, Some(page_numbers)))
     }
 
+    /// Render explicit 1-based source pages as PNG screenshots.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn screenshot_pages<P>(
+        &self,
+        input: PdfInput,
+        page_numbers: P,
+    ) -> Result<Vec<ScreenshotResult>, LiteParseError>
+    where
+        P: AsRef<[u32]>,
+    {
+        self.screenshot_pages_input(input, page_numbers).await
+    }
+
     pub fn config(&self) -> &LiteParseConfig {
         &self.config
     }
@@ -1554,7 +1580,7 @@ impl DocumentOperations for LiteParse {
     where
         P: AsRef<[u32]> + Send,
     {
-        self.screenshot_pages_input(input, page_numbers)
+        LiteParse::screenshot_pages(self, input, page_numbers)
     }
 }
 
@@ -1632,6 +1658,7 @@ impl OpenDocument {
     {
         let page_numbers = page_numbers.as_ref();
         self.transact(|transaction| {
+            transaction.resolved.ensure_renderable()?;
             screenshot_transaction(&self.parser, transaction, Some(page_numbers))
         })
     }
