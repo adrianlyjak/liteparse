@@ -245,6 +245,59 @@ struct ReopeningDocumentAccess<'a> {
     resolved: &'a ResolvedInput,
 }
 
+/// Parsing operations shared by document implementations.
+///
+/// Implementations choose whether each operation receives a document source
+/// or uses one already bound to the receiver. Page rendering operations extend
+/// this contract alongside their public APIs.
+pub trait DocumentOperations: Sync {
+    /// The document source supplied to each operation.
+    type Input: Send;
+
+    /// Parse the document with the configuration used to create it.
+    fn parse(
+        &self,
+        input: Self::Input,
+    ) -> impl Future<Output = Result<ParseResult, LiteParseError>> + Send;
+
+    /// Parse an explicit set of 1-based source pages.
+    fn parse_pages<P>(
+        &self,
+        input: Self::Input,
+        page_numbers: P,
+    ) -> impl Future<Output = Result<ParseResult, LiteParseError>> + Send
+    where
+        P: AsRef<[u32]> + Send;
+}
+
+fn normalize_page_numbers<P>(
+    page_numbers: P,
+    total_pages: u32,
+    max_pages: usize,
+) -> Result<Vec<u32>, LiteParseError>
+where
+    P: AsRef<[u32]>,
+{
+    let mut page_numbers = page_numbers.as_ref().to_vec();
+    if page_numbers.is_empty() {
+        return Err(LiteParseError::Other(
+            "page selection cannot be empty".to_string(),
+        ));
+    }
+    for &page_number in &page_numbers {
+        if page_number == 0 || page_number > total_pages {
+            return Err(LiteParseError::Other(format!(
+                "page {page_number} out of range (document has {total_pages} pages)"
+            )));
+        }
+    }
+
+    page_numbers.sort_unstable();
+    page_numbers.dedup();
+    page_numbers.truncate(max_pages);
+    Ok(page_numbers)
+}
+
 impl DocumentAccess for ReopeningDocumentAccess<'_> {
     fn transact<T, F>(&self, operation: F) -> Result<T, LiteParseError>
     where
@@ -773,6 +826,48 @@ impl LiteParse {
         .await
     }
 
+    /// Parse an explicit set of 1-based source pages.
+    ///
+    /// The selection must be nonempty and entirely within the document. Pages
+    /// are sorted and deduplicated into source order, then limited by
+    /// `max_pages`. This explicit selection ignores configured `target_pages`.
+    pub async fn parse_pages_input<P>(
+        &self,
+        input: PdfInput,
+        page_numbers: P,
+    ) -> Result<ParseResult, LiteParseError>
+    where
+        P: AsRef<[u32]>,
+    {
+        self.validate_output_config()?;
+        let resolved = self.resolve_input(input).await?;
+        let total_pages = {
+            let library = Library::init();
+            let document = extract::load_document_from_input(
+                &library,
+                &resolved.input,
+                self.config.password.as_deref(),
+            )?;
+            document.page_count().max(0) as u32
+        };
+        let page_numbers =
+            normalize_page_numbers(page_numbers, total_pages, self.config.max_pages)?;
+        self.parse_resolved(&resolved, Some(&page_numbers), self.config.max_pages, None)
+            .await
+    }
+
+    /// Parse explicit 1-based source pages from a path or raw PDF bytes.
+    pub async fn parse_pages<P>(
+        &self,
+        input: PdfInput,
+        page_numbers: P,
+    ) -> Result<ParseResult, LiteParseError>
+    where
+        P: AsRef<[u32]>,
+    {
+        self.parse_pages_input(input, page_numbers).await
+    }
+
     /// Convert a non-PDF input to PDF (if needed) and return it alongside the
     /// guard that keeps any temporary file alive.
     ///
@@ -1187,6 +1282,28 @@ impl LiteParse {
             next_page: 1,
             batch_size,
         })
+    }
+}
+
+impl DocumentOperations for LiteParse {
+    type Input = PdfInput;
+
+    fn parse(
+        &self,
+        input: Self::Input,
+    ) -> impl Future<Output = Result<ParseResult, LiteParseError>> + Send {
+        self.parse_input(input)
+    }
+
+    fn parse_pages<P>(
+        &self,
+        input: Self::Input,
+        page_numbers: P,
+    ) -> impl Future<Output = Result<ParseResult, LiteParseError>> + Send
+    where
+        P: AsRef<[u32]> + Send,
+    {
+        LiteParse::parse_pages(self, input, page_numbers)
     }
 }
 
