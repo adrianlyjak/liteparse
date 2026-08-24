@@ -4,7 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from liteparse import DocumentOperations, LiteParse, OpenDocument, ParseError
+from liteparse import LiteParse, OpenDocument, ParseError
+from liteparse.parser import _DOCUMENT_OPERATION_NAMES
 
 
 @pytest.fixture
@@ -42,11 +43,9 @@ def test_open_document_parse_matches_one_shot(
 
 
 def test_document_operation_names_match_both_public_classes() -> None:
-    operation_names = DocumentOperations.__abstractmethods__
-
-    assert operation_names == {"parse", "parse_pages"}
-    assert operation_names <= set(vars(LiteParse))
-    assert operation_names <= set(vars(OpenDocument))
+    assert _DOCUMENT_OPERATION_NAMES == {"parse", "parse_pages"}
+    assert _DOCUMENT_OPERATION_NAMES <= set(vars(LiteParse))
+    assert _DOCUMENT_OPERATION_NAMES <= set(vars(OpenDocument))
 
 
 def test_selected_page_parse_matches_one_shot(

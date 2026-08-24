@@ -1,6 +1,6 @@
 from importlib.metadata import PackageNotFoundError, version
 
-from .parser import DocumentOperations, LiteParse, OpenDocument, search_items
+from .parser import LiteParse, OpenDocument, search_items
 from .types import (
     AnnotationRect,
     DocumentAnnotation,
@@ -36,7 +36,6 @@ except PackageNotFoundError:  # source tree without installed dist metadata
     __version__ = "0.0.0+unknown"
 __all__ = [
     "LiteParse",
-    "DocumentOperations",
     "OpenDocument",
     "AnnotationRect",
     "DocumentAnnotation",

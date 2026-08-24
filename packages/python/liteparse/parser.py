@@ -1,6 +1,5 @@
 """LiteParse Python wrapper - native Rust bindings via PyO3."""
 
-from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple, Union, cast
 
@@ -437,19 +436,10 @@ def _convert_native_result(native_result: Any) -> ParseResult:
     )
 
 
-class DocumentOperations(ABC):
-    """Operations available on a parsed document."""
-
-    @abstractmethod
-    def parse(self) -> ParseResult:
-        """Parse the document."""
-
-    @abstractmethod
-    def parse_pages(self, page_numbers: Iterable[int]) -> ParseResult:
-        """Parse explicit 1-based source pages."""
+_DOCUMENT_OPERATION_NAMES = frozenset({"parse", "parse_pages"})
 
 
-class OpenDocument(DocumentOperations):
+class OpenDocument:
     """A document normalized to PDF and kept open for page operations."""
 
     def __init__(self, native: Any):

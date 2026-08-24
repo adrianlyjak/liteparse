@@ -30,10 +30,7 @@ async fn selected_page_parse_matches_between_one_shot_and_retained_documents() {
     let parser = parser();
     let input = PdfInput::Path(ACROFORM_PDF.into());
 
-    let one_shot = parser
-        .parse_pages_input(input.clone(), [3, 1, 3])
-        .await
-        .unwrap();
+    let one_shot = parser.parse_pages(input.clone(), [3, 1, 3]).await.unwrap();
     let document = parser.open_document(input).await.unwrap();
     let retained = document.parse_pages([3, 1, 3]).await.unwrap();
 
@@ -82,7 +79,7 @@ async fn selected_page_validation_matches_between_document_modes() {
         (vec![1, 4], "page 4 out of range (document has 3 pages)"),
     ] {
         let one_shot = match parser
-            .parse_pages_input(PdfInput::Path(ACROFORM_PDF.into()), &pages)
+            .parse_pages(PdfInput::Path(ACROFORM_PDF.into()), &pages)
             .await
         {
             Ok(_) => panic!("an invalid one-shot selection should fail"),
@@ -114,10 +111,7 @@ async fn selected_page_parse_normalizes_before_max_pages_and_ignores_target_page
     });
     let input = PdfInput::Path(ACROFORM_PDF.into());
 
-    let one_shot = parser
-        .parse_pages_input(input.clone(), [3, 1, 3])
-        .await
-        .unwrap();
+    let one_shot = parser.parse_pages(input.clone(), [3, 1, 3]).await.unwrap();
     let retained = parser
         .open_document(input)
         .await
